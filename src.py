@@ -4,6 +4,10 @@ import sys
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 
+"""
+PREPROCESSING
+"""
+
 
 def mask_data(what, index=100):
     """
@@ -17,7 +21,7 @@ def mask_data(what, index=100):
     return what
 
 
-def generate_datasets(array, n=10, size=64, length=3, split=None):
+def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=False, task="prediction", down_factor=4):
     """
     Splits input array into training, cross validation and test sets.
     :param array: 3D np array, dataset to be split. This is a channel*900*900 large array of rain radar maps.
@@ -33,6 +37,12 @@ def generate_datasets(array, n=10, size=64, length=3, split=None):
     ch = np.shape(array)[0]
     h = np.shape(array)[1]
     w = np.shape(array)[2]
+
+    if task == "upsampling":
+        length = 1
+    elif task != "prediction":
+        sys.exit("Task must be 'prediction' or 'upsampling'.")
+
     images = np.empty((n, length, size, size))  # n series, each consisting of length frames of size size**2
     for i in range(n):
         # draw 3 random numbers for map number and idx of top left pixel of window
@@ -44,6 +54,10 @@ def generate_datasets(array, n=10, size=64, length=3, split=None):
                      anchor[2]:anchor[2] + size] for ar in np.asarray(array)[anchor[0]:anchor[0] + length]]
             valid = valid_image(image)
         images[i] = image
+
+    # normalization
+    if normalize:
+        images = images / images.max()
 
     txt = f"Shape of data: {np.shape(images)}"
     if split is not None:  # split
@@ -59,12 +73,29 @@ def generate_datasets(array, n=10, size=64, length=3, split=None):
         else:
             sys.exit("All split values must be either fractions for percentages or integers.")
 
-        update_output(
-            txt + f"\n\nTraining set: {np.shape(train)}\nValidation set: {np.shape(xval)}\nTest set: {np.shape(test)}")
-        return train, xval, test
+        txt = txt + f"\n\nTraining set: {np.shape(train)}\nValidation set: {np.shape(xval)}\nTest set: {np.shape(test)}"
+        if task == "upsampling":  # downsample
+            low_res_train, low_res_xval, low_res_test = [data[:, :, ::down_factor, ::down_factor] for data in
+                                                         [train, xval, test]]
+            update_output(txt + f"\n\nShape of downsampled data:\n\n" +
+            f"Training set: {np.shape(low_res_train)}\nValidation set: {np.shape(low_res_xval)}\nTest set: {np.shape(low_res_test)}")
+            return {"low_res_train": low_res_train,
+                    "low_res_xval": low_res_xval,
+                    "low_res_test": low_res_test,
+                    "train": train,
+                    "xval": xval,
+                    "test": test}
+        else:
+            update_output(txt)
+            return {"train": train, "xval": xval, "test": test}
     else:  # no split
-        update_output(txt)
-        return images
+        if task == "upsampling":  # downsample
+            low_res_data = images[:, :, ::down_factor, ::down_factor]
+            update_output(txt + f"\nShape of downsampled data: {np.shape(low_res_data)}")
+            return {"low_res_data": low_res_data, "images": images}  # data and ground truth
+        else:
+            update_output(txt)
+            return {"images": images}
 
 
 def valid_image(image):
@@ -80,6 +111,10 @@ def valid_image(image):
     junk += [len(np.array(image).flatten()[np.array(image).flatten() <= 0]) > 0.75 * len(np.array(image).flatten())]
     return 0 if any(junk) else 1
 
+"""
+UTILS
+"""
+
 
 def update_output(string):
     """
@@ -88,6 +123,45 @@ def update_output(string):
     """
     clear_output(wait=True)
     print(string)
+
+"""
+METRICS
+"""
+
+
+def relative_error(truth, predictions):
+    """
+    :param truth: ground truth
+    :param predictions: predictions of network
+    :return: relative error(array)
+    """
+    images = np.zeros_like(truth)
+    sums = np.zeros(predictions.shape[0])
+    for i in range(0, predictions.shape[0]):
+        num = np.abs(predictions[i, 0, :, :] - truth[i, 0, :, :])
+        den = np.abs(truth[i, :, :, :])
+        images[i, :, :, :] = np.divide(num, den)
+        sums[i] = np.sum(num) / np.sum(den)
+    return images, sums
+
+
+def arg_getter(truth, predictions):
+    """
+    orders predictions according to their rel. error
+    :param truth: ground truth
+    :param predictions: output from network
+    :return: list of ordered sample indices in decreasing order
+    """
+    _, test = relative_error(truth, predictions)
+    sort = np.asarray(sorted(test))
+    print(test.argmax())
+    sorted_args = [list(test).index(error) for error in sort]
+    # decreasing order, arg 0 is the best, -1 is the worst
+    return sorted_args
+
+"""
+VISUALISATION
+"""
 
 
 def visualise_data(images, cmap='viridis', facecolor='w'):
@@ -99,10 +173,49 @@ def visualise_data(images, cmap='viridis', facecolor='w'):
     num_img = np.shape(images)[0]
     n = np.random.randint(0, num_img)
 
-    plt.figure(num=None, figsize=(20, 10), dpi=80, facecolor=facecolor)
+    plt.figure(num=None, dpi=80, facecolor=facecolor)
     l = np.shape(images)[1]
     for i in range(l):
         plt.subplot(1, l, i + 1)
         plt.imshow(np.ma.masked_where(images[n][i] < 0, images[n][i]), cmap=cmap)
         plt.title(f"Instance #{n+1} from {num_img}\nFrame: {i}")
     plt.subplots_adjust(hspace=0.3, wspace=0.3)
+
+
+def error_distribution(truth, predictions, nbins=20):
+    """
+    plot relative error dist. of results
+    :param truth: ground truth
+    :param predictions: predictions of network
+    :return: nothing (plots relative error distributions)
+    """
+    error_images, error_vals = relative_error(truth, predictions)
+    plt.hist(error_vals, nbins)
+    plt.xlabel('relative error')
+    plt.ylabel('count')
+    plt.title('mean = ' + str(np.mean(error_vals))[0:5] + ', min = ' + str(np.min(error_vals))[0:5] + ', max = ' + str(
+        np.max(error_vals))[0:5])
+    plt.yticks(list(set([int(tick) for tick in plt.yticks()[0]])))
+    plt.show()
+    return error_images, error_vals
+
+
+def upsample_plotter(indices, datasets):
+    title = ['Original', 'Downsampled', 'Upsampled', 'Relative error']
+    for i in indices:
+        fig, axes = plt.subplots(nrows=1, ncols=4, num=None, figsize=(16, 16), dpi=80, facecolor='w', edgecolor='k')
+        for j,ax in enumerate(axes.flat):
+            im = ax.imshow(datasets[j][int(i),0],vmin=0,vmax=max([np.max(dset[int(i)]) for dset in datasets[:2]]) if int(j)<3 else None)
+            ax.set_title(f"{title[j]} (#{int(i)})", fontsize=10)
+            colorbar(im)
+            ax.axis('off')
+    plt.show()
+
+
+def colorbar(mappable):
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    ax = mappable.axes
+    fig = ax.figure
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    return fig.colorbar(mappable, cax=cax)
