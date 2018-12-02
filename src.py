@@ -3,6 +3,32 @@ import numpy as np
 import sys
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
+import tensorflow as tf
+from tensorflow import keras
+from matplotlib import colors
+
+"""
+DATA IMPORT
+"""
+
+
+def get_data(data_dir, total_length=None, mask=True):
+    files = listdir(data_dir)
+    if total_length is None:
+        total_length = len(files)
+    # array of inputs
+    inputs = np.empty((total_length, 900, 900))
+    # import data to the inputs array
+    for i, file in enumerate(files):
+        if i == total_length:
+            break
+        clear_output(wait=True)
+        print(f"[{i+1}/{total_length}]")
+        ascii_grid = np.loadtxt(f"{data_dir}/{files[i]}", skiprows=6)
+        inputs[i] = ascii_grid
+    if mask & (total_length > 100):
+        inputs = mask_data(inputs, 100)
+    return inputs
 
 """
 PREPROCESSING
@@ -125,6 +151,31 @@ def update_output(string):
     print(string)
 
 """
+LOSS FUNCTIONS
+"""
+
+
+def gradient_diff(yTrue, yPred):
+    alpha = 1
+    return keras.backend.sum(keras.backend.pow(keras.backend.abs(keras.backend.abs(yTrue[:,:,1:,:,:] - yTrue[:,:,:-1,:,:]) -
+           keras.backend.abs(yPred[:,:,1:,:,:] - yPred[:,:,:-1,:,:])),alpha)) + keras.backend.sum(
+           keras.backend.pow(keras.backend.abs(keras.backend.abs(yTrue[:,:,:,1:,:] - yTrue[:,:,:,:-1,:]) -
+           keras.backend.abs(yPred[:,:,:,1:,:] - yPred[:,:,:,:-1,:])),alpha))
+
+
+def relative_error_tensor(truth, predictions):
+    """
+    :param truth: ground truth
+    :param predictions: predictions of network
+    :return: relative error(scalar)
+    """
+    results = tf.divide(keras.backend.sum(keras.backend.abs(tf.subtract(predictions, truth))),
+                        keras.backend.sum(keras.backend.abs(truth)))
+    print(results)
+    print(truth)
+    return results
+
+"""
 METRICS
 """
 
@@ -136,13 +187,32 @@ def relative_error(truth, predictions):
     :return: relative error(array)
     """
     images = np.zeros_like(truth)
-    sums = np.zeros(predictions.shape[0])
-    for i in range(0, predictions.shape[0]):
+    sums = np.zeros(predictions.shape[0])  # sample size
+    means = np.zeros(predictions.shape[0])
+    for i in range(0, predictions.shape[0]):  # loop over samples
         num = np.abs(predictions[i, 0, :, :] - truth[i, 0, :, :])
         den = np.abs(truth[i, :, :, :])
         images[i, :, :, :] = np.divide(num, den)
         sums[i] = np.sum(num) / np.sum(den)
-    return images, sums
+        means[i] = np.mean(num) / np.mean(den)
+    return images, sums, means
+
+
+def difference(truth, predictions):
+    """
+    :param truth: ground truth
+    :param predictions: predictions of network
+    :return: relative error(array)
+    """
+    images = np.zeros_like(truth)
+    sums = np.zeros(predictions.shape[0])  # sample size
+    means = np.zeros(predictions.shape[0])
+    for i in range(0, predictions.shape[0]):  # loop over samples
+        diff = np.abs(predictions[i, 0, :, :] - truth[i, 0, :, :])
+        images[i, :, :, :] = diff
+        sums[i] = np.sum(diff)
+        means[i] = np.mean(diff)
+    return images, sums, means
 
 
 def arg_getter(truth, predictions):
@@ -152,9 +222,8 @@ def arg_getter(truth, predictions):
     :param predictions: output from network
     :return: list of ordered sample indices in decreasing order
     """
-    _, test = relative_error(truth, predictions)
+    _, test, _ = relative_error(truth, predictions)
     sort = np.asarray(sorted(test))
-    print(test.argmax())
     sorted_args = [list(test).index(error) for error in sort]
     # decreasing order, arg 0 is the best, -1 is the worst
     return sorted_args
@@ -168,6 +237,8 @@ def visualise_data(images, cmap='viridis', facecolor='w'):
     """
     Plots random elements e.g. from training dataset.
     :param images: 4D np array, image frames to plot. Dimensions: (#data in set, #frames, h, w)
+    :param cmap: colormap
+    :param facecolor: background color
     """
 
     num_img = np.shape(images)[0]
@@ -182,14 +253,22 @@ def visualise_data(images, cmap='viridis', facecolor='w'):
     plt.subplots_adjust(hspace=0.3, wspace=0.3)
 
 
-def error_distribution(truth, predictions, nbins=20):
+def error_distribution(truth, predictions, nbins=20, metric="difference"):
     """
     plot relative error dist. of results
     :param truth: ground truth
     :param predictions: predictions of network
+    :param metric: difference or relative_error
     :return: nothing (plots relative error distributions)
     """
-    error_images, error_vals = relative_error(truth, predictions)
+
+    if metric == "relative_error":
+        error_images, error_vals, error_means = relative_error(truth, predictions)
+    elif metric == "difference:":
+        error_images, error_vals, error_means = difference(truth, predictions)
+    else:
+        sys.exit("Metric must be 'difference' or 'relative_error'.")
+
     plt.hist(error_vals, nbins)
     plt.xlabel('relative error')
     plt.ylabel('count')
@@ -197,18 +276,27 @@ def error_distribution(truth, predictions, nbins=20):
         np.max(error_vals))[0:5])
     plt.yticks(list(set([int(tick) for tick in plt.yticks()[0]])))
     plt.show()
-    return error_images, error_vals
+    return error_images, error_vals, error_means
 
 
-def upsample_plotter(indices, datasets):
-    title = ['Original', 'Downsampled', 'Upsampled', 'Relative error']
+def result_plotter(indices, datasets, task='prediction'):
+
+    if task == 'prediction':
+        title = ['Frame t', 'Frame t+1', 'Prediction t+1', 'Relative error']
+    elif task == 'upsampling':
+        title = ['Original', 'Downsampled', 'Upsampled', 'Relative error']
+    else:
+        sys.exit("Task must be 'prediction' or 'upsampling'.")
     for i in indices:
         fig, axes = plt.subplots(nrows=1, ncols=4, num=None, figsize=(16, 16), dpi=80, facecolor='w', edgecolor='k')
-        for j,ax in enumerate(axes.flat):
-            im = ax.imshow(datasets[j][int(i),0],vmin=0,vmax=max([np.max(dset[int(i)]) for dset in datasets[:2]]) if int(j)<3 else None)
-            ax.set_title(f"{title[j]} (#{int(i)})", fontsize=10)
+        for j, ax in enumerate(axes.flat):
+            im = ax.imshow(datasets[j][int(i), 0], vmin=0,
+                           vmax=max([np.max(dset[int(i)]) for dset in datasets[:2]]) if int(j) < 3 else None,
+                           norm=colors.PowerNorm(gamma=0.5) if int(j) == 3 else None)
+            ax.set_title(f"{title[j]}", fontsize=10)
             colorbar(im)
             ax.axis('off')
+    plt.savefig('foo.png')
     plt.show()
 
 
