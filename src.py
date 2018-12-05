@@ -6,7 +6,8 @@ from IPython.display import clear_output
 import tensorflow as tf
 from tensorflow import keras
 from matplotlib import colors
-"d"
+import keras.backend as K
+
 """
 DATA IMPORT
 """
@@ -81,9 +82,9 @@ def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=Fals
             valid = valid_image(image)
         images[i] = image
 
-    # normalization
+    # normalization each sequence
     if normalize:
-        images = images / images.max()
+        images = np.array([s/s.max() for s in images])
 
     txt = f"Shape of data: {np.shape(images)}"
     if split is not None:  # split
@@ -134,7 +135,8 @@ def valid_image(image):
     :return: bool, whether the data instance is valid in terms of usability
     """
     junk = [len(set(np.array(ar).flatten())) <= 4 for ar in image]
-    junk += [len(np.array(image).flatten()[np.array(image).flatten() <= 0]) > 0.75 * len(np.array(image).flatten())]
+    junk += [len(np.array(frame).flatten()[
+             np.array(frame).flatten() <= 0]) > 0.75 * len(np.array(frame).flatten()) for frame in image]
     return 0 if any(junk) else 1
 
 """
@@ -157,11 +159,12 @@ LOSS FUNCTIONS
 
 def gradient_diff(yTrue, yPred):
     alpha = 1
-    return keras.backend.sum(keras.backend.pow(keras.backend.abs(keras.backend.abs(yTrue[:,:,1:,:,:] - yTrue[:,:,:-1,:,:]) -
-           keras.backend.abs(yPred[:,:,1:,:,:] - yPred[:,:,:-1,:,:])),alpha)) + keras.backend.sum(
-           keras.backend.pow(keras.backend.abs(keras.backend.abs(yTrue[:,:,:,1:,:] - yTrue[:,:,:,:-1,:]) -
-           keras.backend.abs(yPred[:,:,:,1:,:] - yPred[:,:,:,:-1,:])),alpha))
-
+    true = K.pow(K.flatten(K.abs(K.abs(yTrue[:,:,1:,:,:] - yTrue[:,:,:-1,:,:]) -
+                                 K.abs(yPred[:,:,1:,:,:] - yPred[:,:,:-1,:,:]))),alpha)
+    pred = K.pow(K.flatten(K.abs(K.abs(yTrue[:,:,:,1:,:] - yTrue[:,:,:,:-1,:]) -
+                                 K.abs(yPred[:,:,:,1:,:] - yPred[:,:,:,:-1,:]))),alpha)
+    num = K.sum(true + pred)
+    return num / tf.to_float((K.shape(true)[0] + K.shape(pred)[0]))
 
 def relative_error_tensor(truth, predictions):
     """
@@ -264,7 +267,7 @@ def error_distribution(truth, predictions, nbins=20, metric="difference"):
 
     if metric == "relative_error":
         error_images, error_vals, error_means = relative_error(truth, predictions)
-    elif metric == "difference:":
+    elif metric == "difference":
         error_images, error_vals, error_means = difference(truth, predictions)
     else:
         sys.exit("Metric must be 'difference' or 'relative_error'.")
@@ -282,21 +285,21 @@ def error_distribution(truth, predictions, nbins=20, metric="difference"):
 def result_plotter(indices, datasets, task='prediction'):
 
     if task == 'prediction':
-        title = ['Frame t', 'Frame t+1', 'Prediction t+1', 'Relative error']
+        title = ['Frame t', 'Frame t+1', 'Prediction t+1', 'Pixelwise difference']
     elif task == 'upsampling':
-        title = ['Original', 'Downsampled', 'Upsampled', 'Relative error']
+        title = ['Original', 'Downsampled', 'Upsampled', 'Pixelwise difference']
     else:
         sys.exit("Task must be 'prediction' or 'upsampling'.")
     for i in indices:
         fig, axes = plt.subplots(nrows=1, ncols=4, num=None, figsize=(16, 16), dpi=80, facecolor='w', edgecolor='k')
         for j, ax in enumerate(axes.flat):
             im = ax.imshow(datasets[j][int(i), 0], vmin=0,
-                           vmax=max([np.max(dset[int(i)]) for dset in datasets[:2]]) if int(j) < 3 else None,
-                           norm=colors.PowerNorm(gamma=0.5) if int(j) == 3 else None)
+                           vmax=max([np.max(dset[int(i)]) for dset in datasets[:2]]) if int(j) < 3 else None)
+                           #, norm=colors.PowerNorm(gamma=0.5) if int(j) == 3 else None)
             ax.set_title(f"{title[j]}", fontsize=10)
             colorbar(im)
             ax.axis('off')
-    plt.savefig('foo.png')
+        plt.savefig(f"Sample_{i}.png")
     plt.show()
 
 
