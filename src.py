@@ -278,6 +278,7 @@ def error_distribution(truth, predictions, nbins=20, metric="difference"):
     plt.title('mean = ' + str(np.mean(error_vals))[0:5] + ', min = ' + str(np.min(error_vals))[0:5] + ', max = ' + str(
         np.max(error_vals))[0:5])
     plt.yticks(list(set([int(tick) for tick in plt.yticks()[0]])))
+    plt.savefig("Error.png")
     plt.show()
     return error_images, error_vals, error_means
 
