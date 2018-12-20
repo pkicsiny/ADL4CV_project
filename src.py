@@ -1,6 +1,8 @@
 from os import *
 import numpy as np
+import pandas as pd
 import sys
+import re
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 import tensorflow as tf
@@ -157,14 +159,63 @@ LOSS FUNCTIONS
 """
 
 
+def custom_loss(loss="l2+gd"):
+    def loss_function(y_true, y_pred):
+        """
+        Method for custom loss. Add new losses as a new if.
+        """
+        losses = 0
+        loss_name = ""
+        if type(loss) == str:
+            loss_ = pd.Series(list(filter(None, list(re.split("[\+, ]", loss)))))
+        else:
+            loss_ = pd.Series(loss)
+
+        if loss_.isin(["l1", "L1", "l_1", "L_1", "mae", "MAE", "mean_absolute_error"]).any():
+            losses += keras.losses.mean_absolute_error(y_true, y_pred)
+            loss_name += "L1 + "
+        if loss_.isin(["l2", "L2", "l_2", "L_2", "mse", "MSE", "mean_squared_error", "mean_square_error"]).any():
+            losses += keras.losses.mean_squared_error(y_true, y_pred)
+            loss_name += "L2 + "
+        if loss_.isin(["gd", "gdl", "gradient", "gradient_loss", "gradient_diff", "gradient_difference",
+                       "gradient_difference_loss"]).any():
+            losses += gradient_diff(y_true, y_pred)
+            loss_name += "gradient difference + "
+
+        if losses != 0:
+            print(f"***Using {loss_name[:-2]}loss.***")
+        else:
+            print("***Loss not understood. Using L2 loss as default.***")
+            losses += keras.losses.mean_squared_error(y_true, y_pred)
+
+        return losses
+
+    return loss_function
+
+
 def gradient_diff(yTrue, yPred):
+    """
+    Channels last. Images can be either 4 or 5 dim depending on the data shape needed for the networks.
+    H and W are dims 2,3 for 5D and 1,2 for 4D data.
+    :param yTrue: ground truth
+    :param yPred: prediction of network
+    :return: gradient loss from https://arxiv.org/pdf/1511.05440.pdf
+    """
     alpha = 1
-    true = K.pow(K.flatten(K.abs(K.abs(yTrue[:,:,1:,:,:] - yTrue[:,:,:-1,:,:]) -
-                                 K.abs(yPred[:,:,1:,:,:] - yPred[:,:,:-1,:,:]))),alpha)
-    pred = K.pow(K.flatten(K.abs(K.abs(yTrue[:,:,:,1:,:] - yTrue[:,:,:,:-1,:]) -
-                                 K.abs(yPred[:,:,:,1:,:] - yPred[:,:,:,:-1,:]))),alpha)
+    if len(yTrue.shape) == len(yPred.shape) == 4:
+        true = K.pow(K.flatten(K.abs(K.abs(yTrue[:, 1:, :, :] - yTrue[:, :-1, :, :]) -
+                               K.abs(yPred[:, 1:, :, :] - yPred[:, :-1, :, :]))), alpha)
+        pred = K.pow(K.flatten(K.abs(K.abs(yTrue[:, :, 1:, :] - yTrue[:, :, :-1, :]) -
+                               K.abs(yPred[:, :, 1:, :] - yPred[:, :, :-1, :]))), alpha)
+
+    elif len(yTrue.shape) == len(yPred.shape) == 5:
+        true = K.pow(K.flatten(K.abs(K.abs(yTrue[:, :, 1:, :, :] - yTrue[:, :, :-1, :, :]) -
+                               K.abs(yPred[:, :, 1:, :, :] - yPred[:, :, :-1, :, :]))), alpha)
+        pred = K.pow(K.flatten(K.abs(K.abs(yTrue[:, :, :, 1:, :] - yTrue[:, :, :, :-1, :]) -
+                               K.abs(yPred[:, :, :, 1:, :] - yPred[:, :, :, :-1, :]))), alpha)
     num = K.sum(true + pred)
     return num / tf.to_float((K.shape(true)[0] + K.shape(pred)[0]))
+
 
 def relative_error_tensor(truth, predictions):
     """
