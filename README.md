@@ -1,5 +1,5 @@
 # ADL4CV_project
-Prediction of rainy areas from satellite images with deep learning algorithms.
+Prediction of rainy areas from radar images with deep learning algorithms.
 
 Weather data source: ftp://ftp-cdc.dwd.de/pub/CDC/grids_germany/hourly/radolan/historical/asc/
 
