@@ -37,7 +37,7 @@ def get_data(data_dir, which="h", total_length=None, mask=True):
         if which in ["h", "hourly"]:
             ascii_grid = np.loadtxt(f"{data_dir}/{files[i]}", skiprows=6)
             inputs[i] = ascii_grid
-        elif which in ["5m", "5min", "5minutes", "5minute"]:
+        elif which in ["5m", "5min"]:
             print(data_dir + '/' + file)
             with open(data_dir + '/' + file, "rb") as f:
                 byte = f.read()
