@@ -350,7 +350,7 @@ def error_distribution(truth, predictions, nbins=20, metric="difference"):
     plt.title('mean = ' + str(np.mean(error_vals))[0:5] + ', min = ' + str(np.min(error_vals))[0:5] + ', max = ' + str(
         np.max(error_vals))[0:5])
     plt.yticks(list(set([int(tick) for tick in plt.yticks()[0]])))
-    plt.savefig(f"{metric}.png")
+    plt.savefig(f"Plots/{metric}.png")
     plt.show()
     return error_images, error_vals, error_means
 
@@ -371,7 +371,7 @@ def result_plotter(indices, datasets):
             ax.set_title(f"{title[j]}", fontsize=10)
             colorbar(im)
             ax.axis('off')
-        plt.savefig(f"Sample_{i}.png")
+        plt.savefig(f"Plots/Sample_{i}.png")
     plt.show()
 
 
