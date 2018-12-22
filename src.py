@@ -1,4 +1,4 @@
-from os import *
+import os
 import numpy as np
 import pandas as pd
 import sys
@@ -15,8 +15,16 @@ DATA IMPORT
 """
 
 
-def get_data(data_dir, total_length=None, mask=True):
-    files = listdir(data_dir)
+def get_data(data_dir, which="h", total_length=None, mask=True):
+    """
+    Imports data from files.
+    :param data_dir: string, path of directory containing the data files
+    :param which: string, resolution of data: "h", "hourly" for hourly and "5m", "5min" for 5 minutes
+    :param total_length: int number of files to read
+    :param mask: bool, mask the data with the largest mask among the files
+    :return: numpy array imported data
+    """
+    files = os.listdir(data_dir)
     if total_length is None:
         total_length = len(files)
     # array of inputs
@@ -25,10 +33,22 @@ def get_data(data_dir, total_length=None, mask=True):
     for i, file in enumerate(files):
         if i == total_length:
             break
-        clear_output(wait=True)
-        print(f"[{i+1}/{total_length}]")
-        ascii_grid = np.loadtxt(f"{data_dir}/{files[i]}", skiprows=6)
-        inputs[i] = ascii_grid
+        update_output(f"[{i+1}/{total_length}]")
+        if which in ["h", "hourly"]:
+            ascii_grid = np.loadtxt(f"{data_dir}/{files[i]}", skiprows=6)
+            inputs[i] = ascii_grid
+        elif which in ["5m", "5min"]:
+            print(data_dir + '/' + file)
+            with open(data_dir + '/' + file, "rb") as f:
+                byte = f.read()
+                start = 0
+                for j in range(len(byte)):
+                    if byte[j] == 62:
+                        start = j
+                        break
+                inputs[i] = np.flip(np.reshape(np.asarray([c for c in byte[start + 3:]]), (900, 900)), axis=0)
+                inputs[i][inputs[i] == 250] = -1
+
     if mask & (total_length > 100):
         inputs = mask_data(inputs, 100)
     return inputs
@@ -107,7 +127,8 @@ def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=Fals
             low_res_train, low_res_xval, low_res_test = [data[:, :, ::down_factor, ::down_factor] for data in
                                                          [train, xval, test]]
             update_output(txt + f"\n\nShape of downsampled data:\n\n" +
-            f"Training set: {np.shape(low_res_train)}\nValidation set: {np.shape(low_res_xval)}\nTest set: {np.shape(low_res_test)}")
+                                f"Training set: {np.shape(low_res_train)}\n" +
+                                f"Validation set: {np.shape(low_res_xval)}\nTest set: {np.shape(low_res_test)}")
             return {"low_res_train": low_res_train,
                     "low_res_xval": low_res_xval,
                     "low_res_test": low_res_test,
@@ -244,9 +265,9 @@ def relative_error(truth, predictions):
     sums = np.zeros(predictions.shape[0])  # sample size
     means = np.zeros(predictions.shape[0])
     for i in range(0, predictions.shape[0]):  # loop over samples
-        num = np.abs(predictions[i, 0, :, :] - truth[i, 0, :, :])
-        den = np.abs(truth[i, :, :, :])
-        images[i, :, :, :] = np.divide(num, den)
+        num = np.abs(predictions[i] - truth[i])
+        den = np.abs(truth[i])
+        images[i] = np.divide(num, den)
         sums[i] = np.sum(num) / np.sum(den)
         means[i] = np.mean(num) / np.mean(den)
     return images, sums, means
@@ -262,8 +283,8 @@ def difference(truth, predictions):
     sums = np.zeros(predictions.shape[0])  # sample size
     means = np.zeros(predictions.shape[0])
     for i in range(0, predictions.shape[0]):  # loop over samples
-        diff = np.abs(predictions[i, 0, :, :] - truth[i, 0, :, :])
-        images[i, :, :, :] = diff
+        diff = np.abs(predictions[i] - truth[i])
+        images[i] = diff
         sums[i] = np.sum(diff)
         means[i] = np.mean(diff)
     return images, sums, means
@@ -278,7 +299,7 @@ def arg_getter(truth, predictions):
     """
     _, test, _ = relative_error(truth, predictions)
     sort = np.asarray(sorted(test))
-    sorted_args = [list(test).index(error) for error in sort]
+    sorted_args = [list(test).index(e) for e in sort]
     # decreasing order, arg 0 is the best, -1 is the worst
     return sorted_args
 
@@ -334,18 +355,17 @@ def error_distribution(truth, predictions, nbins=20, metric="difference"):
     return error_images, error_vals, error_means
 
 
-def result_plotter(indices, datasets, task='prediction'):
-
-    if task == 'prediction':
-        title = ['Frame t', 'Frame t+1', 'Prediction t+1', 'Pixelwise difference']
-    elif task == 'upsampling':
-        title = ['Original', 'Downsampled', 'Upsampled', 'Pixelwise difference']
-    else:
-        sys.exit("Task must be 'prediction' or 'upsampling'.")
+def result_plotter(indices, datasets):
+    """
+    Plots result images.
+    :param indices: list of integers. These are the indices of the images of the result.
+    :param datasets: list of arrays.
+    """
+    title = ['Frame t', 'Frame t+1', 'Prediction t+1', 'Pixelwise difference']
     for i in indices:
         fig, axes = plt.subplots(nrows=1, ncols=4, num=None, figsize=(16, 16), dpi=80, facecolor='w', edgecolor='k')
         for j, ax in enumerate(axes.flat):
-            im = ax.imshow(datasets[j][int(i), 0], vmin=0,
+            im = ax.imshow(datasets[j][int(i)], vmin=0,
                            vmax=max([np.max(dset[int(i)]) for dset in datasets[:2]]) if int(j) < 3 else None)
                            #, norm=colors.PowerNorm(gamma=0.5) if int(j) == 3 else None)
             ax.set_title(f"{title[j]}", fontsize=10)
