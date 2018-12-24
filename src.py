@@ -53,6 +53,22 @@ def get_data(data_dir, which="h", total_length=None, mask=True):
         inputs = mask_data(inputs, 100)
     return inputs
 
+
+def load_datasets(dataset="5min"):
+    """
+    If the data is already saved in numpy file then use this to load it.
+    :param dataset: str, which data: hourly or 5 minutes resolution
+    :return: train, validation, test sets
+    """
+    if dataset in ["5m", "5min", "5minutes", "5minute"]:
+        images = np.load(sys.path[0]+"/5_minute.npy").item()
+    elif dataset in ["h", "hourly"]:
+        images = np.load(sys.path[0]+"/hourly.npy").item()
+    train = np.reshape(images["train"],np.shape(images["train"])+(1,))
+    xval = np.reshape(images["xval"],np.shape(images["xval"])+(1,))
+    test = np.reshape(images["test"],np.shape(images["test"])+(1,))
+    print(f"Training data: {train.shape}\nValidation data: {xval.shape}\nTest data: {test.shape}")
+    return train, xval, test
 """
 PREPROCESSING
 """
