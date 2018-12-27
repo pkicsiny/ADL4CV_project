@@ -9,6 +9,8 @@ import tensorflow as tf
 from tensorflow import keras
 from matplotlib import colors
 import keras.backend as K
+from ipywidgets import interact, IntSlider
+from IPython.display import display
 
 """
 DATA IMPORT
@@ -56,7 +58,7 @@ def get_data(data_dir, which="h", total_length=None, mask=True):
 
 def load_datasets(dataset="5min"):
     """
-    If the data is already saved in numpy file then use this to load it.
+    If the data is already saved in numpy (.npy) file then use this to load it.
     :param dataset: str, which data: hourly or 5 minutes resolution
     :return: train, validation, test sets
     """
@@ -69,6 +71,45 @@ def load_datasets(dataset="5min"):
     test = np.reshape(images["test"],np.shape(images["test"])+(1,))
     print(f"Training data: {train.shape}\nValidation data: {xval.shape}\nTest data: {test.shape}")
     return train, xval, test
+
+
+def get_rain_grid_coords(directory="rain_grid_coordinates"):
+    """
+    Reads the GPS latitude, longitude values of the rain radar grid into a pandas dataframe. The content
+    of the current file are the center coordinates of each grid cell.
+    :param directory: folder of the data file
+    :return: dataframe of [latitude, longitude, ID] ID is an arbitrary integer enumeration of the cells.
+    """
+    lon, lat = [pd.DataFrame([re.findall('..\......',row[0]) for idx,
+                        row in pd.read_table(sys.path[0]+f"/{directory}/{file}_center.txt",
+                        header=None).iterrows()]) for file in ['lambda', 'phi']]
+    coords = pd.DataFrame(columns={"LAT", "LON"})
+    coords["LAT"] = np.round(pd.Series([item for sublist in lat.values.tolist() for item in sublist]).astype(float),4)
+    coords["LON"] = np.round(pd.Series([item for sublist in lon.values.tolist() for item in sublist]).astype(float),4)
+    coords["CELL_ID"] = coords.index.values
+    return coords
+
+
+def get_germany(w_vel, coords):
+    """
+    Fetches GPS coordinates of grid cells inside Germany (a Germany shaped unmasked part of the wind maps).
+    Columns are latitude, longitude, cell id (arb. integer, id in original wind grid)
+    Then matches nearest neighbor radar cell to each wind (Germany) cell then saves the df in a pickle file.
+    So use this if the pickle is not available.
+    Works with unflipped (original) wind grid. (Needs flipping.)
+    """
+    germany = pd.DataFrame(data={'LAT':w_vel['lat'][:][~w_vel['FF'][0].mask],
+                             'LON':w_vel['lon'][:][~w_vel['FF'][0].mask],
+                             'CELL_ID':pd.DataFrame(w_vel['FF'][0].flatten()).dropna().index.values})[['LAT', 'LON', "CELL_ID"]]
+    #get closest radar grid cell to each wind cell
+    germany["closest_idx"] = -1
+    for i, point in enumerate(germany["CELL_ID"]):
+        src.update_output(f"[{i}/{len(germany)}]")
+        #dists = germany.iloc[point][["LAT","LON"]] - coords[["LAT","LON"]]
+        germany["closest_idx"].iloc[point] = np.sqrt((germany.iloc[point]["LAT"] - coords["LAT"])**2 +
+                                                     (germany.iloc[point]["LON"] - coords["LON"])**2).idxmin()
+    with open('germany.pickle', 'wb') as handle:
+        pickle.dump(germany, handle, protocol=pickle.HIGHEST_PROTOCOL)
 """
 PREPROCESSING
 """
@@ -182,6 +223,50 @@ def valid_image(image):
 UTILS
 """
 
+def freeze_header(df, num_rows=30, num_columns=10, step_rows=1,
+                  step_columns=1):
+    """
+    Freeze the headers (column and index names) of a Pandas DataFrame. A widget
+    enables to slide through the rows and columns.
+
+    Parameters
+    ----------
+    df : Pandas DataFrame
+        DataFrame to display
+    num_rows : int, optional
+        Number of rows to display
+    num_columns : int, optional
+        Number of columns to display
+    step_rows : int, optional
+        Step in the rows
+    step_columns : int, optional
+        Step in the columns
+
+    Returns
+    -------
+    Displays the DataFrame with the widget
+    """
+    @interact(last_row=IntSlider(min=min(num_rows, df.shape[0]),
+                                 max=df.shape[0],
+                                 step=step_rows,
+                                 description='rows',
+                                 readout=False,
+                                 disabled=False,
+                                 continuous_update=True,
+                                 orientation='horizontal',
+                                 slider_color='purple'),
+              last_column=IntSlider(min=min(num_columns, df.shape[1]),
+                                    max=df.shape[1],
+                                    step=step_columns,
+                                    description='columns',
+                                    readout=False,
+                                    disabled=False,
+                                    continuous_update=True,
+                                    orientation='horizontal',
+                                    slider_color='purple'))
+    def _freeze_header(last_row, last_column):
+        display(df.iloc[max(0, last_row-num_rows):last_row,
+                        max(0, last_column-num_columns):last_column])
 
 def update_output(string):
     """
