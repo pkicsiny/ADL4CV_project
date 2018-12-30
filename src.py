@@ -60,7 +60,7 @@ def load_datasets(dataset="5min"):
     """
     If the data is already saved in numpy (.npy) file then use this to load it.
     :param dataset: str, which data: hourly or 5 minutes resolution
-    :return: train, validation, test sets
+    :return: train, validation, test sets. Each sample has two channels: time t and t+1
     """
     if dataset in ["5m", "5min", "5minutes", "5minute"]:
         images = np.load(sys.path[0]+"/5_minute.npy").item()
@@ -96,7 +96,7 @@ def get_germany(w_vel, coords):
     Columns are latitude, longitude, cell id (arb. integer, id in original wind grid)
     Then matches nearest neighbor radar cell to each wind (Germany) cell then saves the df in a pickle file.
     So use this if the pickle is not available.
-    Works with unflipped (original) wind grid. (Needs flipping.)
+    Works with unflipped (original) wind grid. (Needs flipping around axis 0 afterwards.)
     """
     germany = pd.DataFrame(data={'LAT':w_vel['lat'][:][~w_vel['FF'][0].mask],
                              'LON':w_vel['lon'][:][~w_vel['FF'][0].mask],
@@ -158,6 +158,7 @@ def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=Fals
             # update_output(f"Cutting images...\n[{i+1}/{n}]")
             image = [ar[anchor[1]:anchor[1] + size,
                      anchor[2]:anchor[2] + size] for ar in np.asarray(array)[anchor[0]:anchor[0] + length]]
+            image[image <= 0] = np.nan() # replace mask values with nan
             valid = valid_image(image)
         images[i] = image
 
@@ -205,6 +206,72 @@ def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=Fals
             return {"images": images}
 
 
+def generate_tempoGAN_datasets(rain_density, wind_vel, wind_dir, n=10, size=64, split=None, normalize=False):
+    """
+    Splits input array into training, cross validation and test sets. This function is used for generating
+    data for the two discriminator GAN. It uses wind fields in addition to the rain field to predict the next rain field.
+    :param rain_density: 3D .nc array, rain maps interpreted as density field. This is a channel*938*720
+         large array of rain radar maps. Data is created by cutting size*size frames randomly from 2 consecutive maps.
+    :param wind_vel: 3D .nc array of wind magnitude maps.
+    :param wind_dir: 3D .nc array of wind directions with integers as degrees.
+    :param n: int, total number of data instances to make
+    :param size: int, height and width in pixels of each frame
+    :param split: list or np array of either floats between 0 and 1 or positive integers. Set to None by deafult
+    which means no splitting, just return all instances in one set.
+    :return: 3D np array, either one dataset of smaller image frames or three datasets for training,
+    cross validating and testing
+    """
+    time = 743
+    h = rain_density[0].shape[0]  # 938
+    w = rain_density[0].shape[1]  # 720
+
+    images = np.empty((n, 4, size, size))  # n series, each of size size**2 and rho,vx,vy,future frames as channels
+    for i in range(n):
+        src.update_output(f"[{i+1}/{n}]")
+        # draw 3 random numbers for map number and idx of top left pixel of window
+        valid = 0
+        while not valid:
+            anchor = (np.random.randint(0, time - 2), np.random.randint(0, h - size), np.random.randint(0, w - size))
+            # update_output(f"Cutting images...\n[{i+1}/{n}]")
+            image = [ar[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan) for ar in [
+                rain_density[anchor[0]],
+                -np.flip(np.sin(np.deg2rad(wind_dir[anchor[0] + 1])), axis=0),
+                -np.flip(np.cos(np.deg2rad(wind_dir[anchor[0] + 1])), axis=0),
+                rain_density[anchor[0] + 1]]]
+            # first channel is the current frame, the next two are the wind x and y components where the index is shifted by 1
+            # because the rain dates are in xx:50 resolution but the wind is in xx:00. The next channels are the next rain fields
+            # to be predicted
+            valid = valid_image(image)
+        images[i] = image
+
+    if normalize:  # to [0,1] only for rain
+        images = [[ch / s[[x for x in [0, -1]]][
+            ~np.isnan(s[[x for x in [0, -1]]])].max() if i in [0, 3] else ch for i, ch in enumerate(s)] for s in images]
+
+    txt = f"Shape of data: {np.shape(images)}"
+    if split is not None:  # split
+        if all((r <= 1) & (r >= 0) for r in split):
+            assert (sum(split) == 1), "Split values must sum up to 1."
+            train = images[:int(n * split[0])]
+            xval = images[int(n * split[0]):int(n * (split[0] + split[1]))]
+            test = images[int(n * (split[0] + split[1])):]
+        elif all(isinstance(r, int) for r in split):
+            train = images[:int(n * split[0] / sum(split))]
+            xval = images[int(n * split[0] / sum(split)):int(n * (split[0] + split[1]) / sum(split))]
+            test = images[int(n * (split[0] + split[1]) / sum(split)):]
+        else:
+            sys.exit("All split values must be either fractions for percentages or integers.")
+
+        txt = txt + f"\n\nTraining set: {np.shape(train)}\nValidation set: {np.shape(xval)}\nTest set: {np.shape(test)}"
+        src.update_output(txt)
+        return {"train": np.transpose(train, (0, 3, 2, 1)),
+                "xval": np.transpose(xval, (0, 3, 2, 1)),
+                "test": np.transpose(test, (0, 3, 2, 1))}
+    else:  # no split
+        src.update_output(txt)
+        return {"images": np.transpose(images, (0, 3, 2, 1))}
+
+
 def valid_image(image):
     """
     Filters out some useless data. in the junk variable several conditions are defined to check on the images.
@@ -214,9 +281,10 @@ def valid_image(image):
     :param image: 3D np array, dimensions are the number of consecutive frames, height and width
     :return: bool, whether the data instance is valid in terms of usability
     """
-    junk = [len(set(np.array(ar).flatten())) <= 4 for ar in image]
+    junk = [len(set(np.array(ar).flatten()[
+                     ~np.isnan(np.array(ar).flatten())])) <= 8 for ar in image]
     junk += [len(np.array(frame).flatten()[
-             np.array(frame).flatten() <= 0]) > 0.75 * len(np.array(frame).flatten()) for frame in image]
+                     np.isnan(np.array(frame).flatten())]) > 0.25 * len(np.array(frame).flatten()) for frame in image]
     return 0 if any(junk) else 1
 
 """
