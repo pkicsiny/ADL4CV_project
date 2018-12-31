@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import sys
 import re
+import pickle
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 import tensorflow as tf
@@ -66,9 +67,9 @@ def load_datasets(dataset="5min"):
         images = np.load(sys.path[0]+"/5_minute.npy").item()
     elif dataset in ["h", "hourly"]:
         images = np.load(sys.path[0]+"/hourly.npy").item()
-    train = np.reshape(images["train"],np.shape(images["train"])+(1,))
-    xval = np.reshape(images["xval"],np.shape(images["xval"])+(1,))
-    test = np.reshape(images["test"],np.shape(images["test"])+(1,))
+    train = np.reshape(images["train"], np.shape(images["train"])+(1,))
+    xval = np.reshape(images["xval"], np.shape(images["xval"])+(1,))
+    test = np.reshape(images["test"], np.shape(images["test"])+(1,))
     print(f"Training data: {train.shape}\nValidation data: {xval.shape}\nTest data: {test.shape}")
     return train, xval, test
 
@@ -81,11 +82,11 @@ def get_rain_grid_coords(directory="rain_grid_coordinates"):
     :return: dataframe of [latitude, longitude, ID] ID is an arbitrary integer enumeration of the cells.
     """
     lon, lat = [pd.DataFrame([re.findall('..\......',row[0]) for idx,
-                        row in pd.read_table(sys.path[0]+f"/{directory}/{file}_center.txt",
-                        header=None).iterrows()]) for file in ['lambda', 'phi']]
+                              row in pd.read_table(sys.path[0]+f"/{directory}/{file}_center.txt",
+                              header=None).iterrows()]) for file in ['lambda', 'phi']]
     coords = pd.DataFrame(columns={"LAT", "LON"})
-    coords["LAT"] = np.round(pd.Series([item for sublist in lat.values.tolist() for item in sublist]).astype(float),4)
-    coords["LON"] = np.round(pd.Series([item for sublist in lon.values.tolist() for item in sublist]).astype(float),4)
+    coords["LAT"] = np.round(pd.Series([item for sublist in lat.values.tolist() for item in sublist]).astype(float), 4)
+    coords["LON"] = np.round(pd.Series([item for sublist in lon.values.tolist() for item in sublist]).astype(float), 4)
     coords["CELL_ID"] = coords.index.values
     return coords
 
@@ -104,7 +105,7 @@ def get_germany(w_vel, coords):
     #get closest radar grid cell to each wind cell
     germany["closest_idx"] = -1
     for i, point in enumerate(germany["CELL_ID"]):
-        src.update_output(f"[{i}/{len(germany)}]")
+        update_output(f"[{i}/{len(germany)}]")
         #dists = germany.iloc[point][["LAT","LON"]] - coords[["LAT","LON"]]
         germany["closest_idx"].iloc[point] = np.sqrt((germany.iloc[point]["LAT"] - coords["LAT"])**2 +
                                                      (germany.iloc[point]["LON"] - coords["LON"])**2).idxmin()
@@ -227,7 +228,7 @@ def generate_tempoGAN_datasets(rain_density, wind_vel, wind_dir, n=10, size=64, 
 
     images = np.empty((n, 4, size, size))  # n series, each of size size**2 and rho,vx,vy,future frames as channels
     for i in range(n):
-        src.update_output(f"[{i+1}/{n}]")
+        update_output(f"[{i+1}/{n}]")
         # draw 3 random numbers for map number and idx of top left pixel of window
         valid = 0
         while not valid:
@@ -238,8 +239,10 @@ def generate_tempoGAN_datasets(rain_density, wind_vel, wind_dir, n=10, size=64, 
                 -np.flip(np.sin(np.deg2rad(wind_dir[anchor[0] + 1])), axis=0),
                 -np.flip(np.cos(np.deg2rad(wind_dir[anchor[0] + 1])), axis=0),
                 rain_density[anchor[0] + 1]]]
-            # first channel is the current frame, the next two are the wind x and y components where the index is shifted by 1
-            # because the rain dates are in xx:50 resolution but the wind is in xx:00. The next channels are the next rain fields
+            # first channel is the current frame, the next two are the wind x and y
+            # components where the index is shifted by 1
+            # because the rain dates are in xx:50 resolution but the wind is
+            # in xx:00. The next channels are the next rain fields
             # to be predicted
             valid = valid_image(image)
         images[i] = image
@@ -263,12 +266,12 @@ def generate_tempoGAN_datasets(rain_density, wind_vel, wind_dir, n=10, size=64, 
             sys.exit("All split values must be either fractions for percentages or integers.")
 
         txt = txt + f"\n\nTraining set: {np.shape(train)}\nValidation set: {np.shape(xval)}\nTest set: {np.shape(test)}"
-        src.update_output(txt)
+        update_output(txt)
         return {"train": np.transpose(train, (0, 3, 2, 1)),
                 "xval": np.transpose(xval, (0, 3, 2, 1)),
                 "test": np.transpose(test, (0, 3, 2, 1))}
     else:  # no split
-        src.update_output(txt)
+        update_output(txt)
         return {"images": np.transpose(images, (0, 3, 2, 1))}
 
 
@@ -290,6 +293,7 @@ def valid_image(image):
 """
 UTILS
 """
+
 
 def freeze_header(df, num_rows=30, num_columns=10, step_rows=1,
                   step_columns=1):
@@ -335,6 +339,7 @@ def freeze_header(df, num_rows=30, num_columns=10, step_rows=1,
     def _freeze_header(last_row, last_column):
         display(df.iloc[max(0, last_row-num_rows):last_row,
                         max(0, last_column-num_columns):last_column])
+
 
 def update_output(string):
     """
@@ -472,6 +477,41 @@ def arg_getter(truth, predictions):
     # decreasing order, arg 0 is the best, -1 is the worst
     return sorted_args
 
+
+def calculate_skill_scores(ypredicted, ytruth, threshold=5):
+    """
+    Calculates some common weather forecasting metrics from these:
+    hit: pred=truth=1, miss: pred=0 truth=1, false larm: pred=1 truth=0
+    The metrics are: CSI: Critical Success Index, FAR: False Alarm Rate, POD: Probability od Detection
+    :param ypredicted: shape (samples,w,h) predictions of network
+    :param ytruth: shape (samles,w,h) same as for the predictions, ground truth next frame
+    :param threshold: integer in 0.1mm. Below this means not raining, above this means raining.
+    :return: csi, far, pod: lists of length sample_size. Metrics for each image.
+    """
+    binary_pred = np.zeros_like(ypredicted)
+    binary_truth = np.zeros_like(ytruth)
+    binary_pred[ypredicted >= threshold] = 1
+    binary_truth[ytruth >= threshold] = 1
+    # hits where the truth and prediction pixel falls to the same side of the threshold (both are 1)
+    # (e.g. rains on truth and rains on prediction)
+    # shape is (no. samples), each element is an int of matching pixels
+    # pred = 1 and truth = 1
+    hits = np.array([len(np.intersect1d(np.where(binary_pred[i].flatten()),
+                         np.where(binary_truth[i].flatten()))) for i in range(len(binary_truth))])
+    # pred = 0 and truth = 1
+    misses = np.array([len(np.intersect1d(np.where(binary_pred[i].flatten() == 0),
+                           np.where(binary_truth[i].flatten()))) for i in range(len(binary_truth))])
+    # pred = 1 and truth = 0
+    false_alarms = np.array([len(np.intersect1d(np.where(binary_pred[i].flatten()),
+                                 np.where(binary_truth[i].flatten() == 0))) for i in range(len(binary_truth))])
+    # critical success index
+    csi = hits/(hits+misses+false_alarms)
+    # false alarm rate
+    far = false_alarms/(hits+false_alarms)
+    # probability of detection
+    pod = hits/(hits+misses)
+    return csi, far, pod
+
 """
 VISUALISATION
 """
@@ -536,7 +576,7 @@ def result_plotter(indices, datasets):
         for j, ax in enumerate(axes.flat):
             im = ax.imshow(datasets[j][int(i)], vmin=0,
                            vmax=max([np.max(dset[int(i)]) for dset in datasets[:2]]) if int(j) < 3 else None)
-                           #, norm=colors.PowerNorm(gamma=0.5) if int(j) == 3 else None)
+            # , norm=colors.PowerNorm(gamma=0.5) if int(j) == 3 else None)
             ax.set_title(f"{title[j]}", fontsize=10)
             colorbar(im)
             ax.axis('off')
