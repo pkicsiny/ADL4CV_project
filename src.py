@@ -207,14 +207,9 @@ def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=Fals
             return {"images": images}
 
 
-def generate_tempoGAN_datasets(rain_density, wind_vel, wind_dir, n=10, size=64, split=None, normalize=False):
+def generate_tempoGAN_datasets(rain_density, wind_vel, wind_dir, n=10, length=2, size=64, split=None, normalize=False):
     """
-    Splits input array into training, cross validation and test sets. This function is used for generating
-    data for the two discriminator GAN. It uses wind fields in addition to the rain field to predict the next rain field.
-    :param rain_density: 3D .nc array, rain maps interpreted as density field. This is a channel*938*720
-         large array of rain radar maps. Data is created by cutting size*size frames randomly from 2 consecutive maps.
-    :param wind_vel: 3D .nc array of wind magnitude maps.
-    :param wind_dir: 3D .nc array of wind directions with integers as degrees.
+    Splits input array into training, cross validation and test sets.
     :param n: int, total number of data instances to make
     :param size: int, height and width in pixels of each frame
     :param split: list or np array of either floats between 0 and 1 or positive integers. Set to None by deafult
@@ -226,31 +221,30 @@ def generate_tempoGAN_datasets(rain_density, wind_vel, wind_dir, n=10, size=64, 
     h = rain_density[0].shape[0]  # 938
     w = rain_density[0].shape[1]  # 720
 
-    images = np.empty((n, 4, size, size))  # n series, each of size size**2 and rho,vx,vy,future frames as channels
+    images = np.zeros(
+        (n, length, size, size, 3))  # n series, each of size size**2 and rho,vx,vy,future frames as channels
     for i in range(n):
-        update_output(f"[{i+1}/{n}]")
+        src.update_output(f"[{i+1}/{n}]")
         # draw 3 random numbers for map number and idx of top left pixel of window
         valid = 0
         while not valid:
             anchor = (np.random.randint(0, time - 2), np.random.randint(0, h - size), np.random.randint(0, w - size))
-            # update_output(f"Cutting images...\n[{i+1}/{n}]")
-            image = [ar[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan) for ar in [
-                rain_density[anchor[0]],
-                -np.flip(np.sin(np.deg2rad(wind_dir[anchor[0] + 1])), axis=0),
-                -np.flip(np.cos(np.deg2rad(wind_dir[anchor[0] + 1])), axis=0),
-                rain_density[anchor[0] + 1]]]
-            # first channel is the current frame, the next two are the wind x and y
-            # components where the index is shifted by 1
-            # because the rain dates are in xx:50 resolution but the wind is
-            # in xx:00. The next channels are the next rain fields
+            image = np.empty((length, size, size, 3))
+            for j in range(length):
+                r = rain_density[anchor[0] + j]
+                x = -np.flip(np.sin(np.deg2rad(wind_dir[anchor[0] + 1 + j])), axis=0)
+                y = -np.flip(np.cos(np.deg2rad(wind_dir[anchor[0] + 1 + j])), axis=0)
+                image[j, :, :, 0] = r[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan)
+                image[j, :, :, 1] = x[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan)
+                image[j, :, :, 2] = y[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan)
+            # first channel is the current frame, the next two are the wind x and y components where the index is shifted by 1
+            # because the rain dates are in xx:50 resolution but the wind is in xx:00. The next channels are the next rain fields
             # to be predicted
             valid = valid_image(image)
-        images[i] = image
+        images[i] += image
 
     if normalize:  # to [0,1] only for rain
-        images = [[ch / s[[x for x in [0, -1]]][
-            ~np.isnan(s[[x for x in [0, -1]]])].max() if i in [0, 3] else ch for i, ch in enumerate(s)] for s in images]
-
+        images[:, :, :, :, 0] = np.array([s[:, :, :, 0] / s[:, :, :, 0].max() for s in images])
     txt = f"Shape of data: {np.shape(images)}"
     if split is not None:  # split
         if all((r <= 1) & (r >= 0) for r in split):
@@ -266,13 +260,13 @@ def generate_tempoGAN_datasets(rain_density, wind_vel, wind_dir, n=10, size=64, 
             sys.exit("All split values must be either fractions for percentages or integers.")
 
         txt = txt + f"\n\nTraining set: {np.shape(train)}\nValidation set: {np.shape(xval)}\nTest set: {np.shape(test)}"
-        update_output(txt)
-        return {"train": np.transpose(train, (0, 3, 2, 1)),
-                "xval": np.transpose(xval, (0, 3, 2, 1)),
-                "test": np.transpose(test, (0, 3, 2, 1))}
+        src.update_output(txt)
+        return {"train": train,
+                "xval": xval,
+                "test": test, }
     else:  # no split
-        update_output(txt)
-        return {"images": np.transpose(images, (0, 3, 2, 1))}
+        #   src.update_output(txt)
+        return images
 
 
 def valid_image(image):
@@ -284,8 +278,15 @@ def valid_image(image):
     :param image: 3D np array, dimensions are the number of consecutive frames, height and width
     :return: bool, whether the data instance is valid in terms of usability
     """
-    junk = [len(set(np.array(ar).flatten()[
-                     ~np.isnan(np.array(ar).flatten())])) <= 8 for ar in image]
+    if len(np.shape(image)) == 3:  # one channel frames
+        junk = [len(set(np.array(frame).flatten()[
+                            ~np.isnan(np.array(frame).flatten())])) <= 8 for frame in image]
+    else:  # three channel frames
+        # frame is a triplet for tempogan images
+        # only rain channel
+        junk = [len(set(np.array(frame[:, :, 0]).flatten()[
+                            ~np.isnan(np.array(frame[:, :, 0]).flatten())])) <= 8 for frame in image]
+
     junk += [len(np.array(frame).flatten()[
                      np.isnan(np.array(frame).flatten())]) > 0.25 * len(np.array(frame).flatten()) for frame in image]
     return 0 if any(junk) else 1
