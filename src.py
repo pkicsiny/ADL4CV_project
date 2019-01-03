@@ -207,13 +207,21 @@ def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=Fals
             return {"images": images}
 
 
-def generate_tempoGAN_datasets(rain_density, wind_vel, wind_dir, n=10, length=2, size=64, split=None, normalize=False):
+def generate_tempoGAN_datasets(rain_density, wind_dir, n=10, length=2, size=64, split=None, normalize=False):
     """
     Splits input array into training, cross validation and test sets.
+    :param rain_density: .nc file containing interpolated rain maps on wind grid. A masked np array of shape
+     744*938*720.
+    :param wind_dir: same as the rain but these are the wind maps on the same grid. They have the same shape. The
+    vx and vy channels are calculated from this.
     :param n: int, total number of data instances to make
+    :param length: int, number of consecutive frames on time axis to cut. It cuts length frames from all three channels.
+    (rho, vx, vy)
     :param size: int, height and width in pixels of each frame
     :param split: list or np array of either floats between 0 and 1 or positive integers. Set to None by deafult
     which means no splitting, just return all instances in one set.
+    :param normalize: boolean, if true, the rain maps will be normalized between [0,1]. They are simply divided by the
+    max pixel value in the series. (Wind is always between [-1,1])
     :return: 3D np array, either one dataset of smaller image frames or three datasets for training,
     cross validating and testing
     """
