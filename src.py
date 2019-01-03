@@ -232,12 +232,13 @@ def generate_tempoGAN_datasets(rain_density, wind_dir, n=10, length=2, size=64, 
     images = np.zeros(
         (n, length, size, size, 3))  # n series, each of size size**2 and rho,vx,vy,future frames as channels
     for i in range(n):
-        update_output(f"[{i+1}/{n}]")
+        print(f"[{i+1}/{n}]")
         # draw 3 random numbers for map number and idx of top left pixel of window
         valid = 0
         while not valid:
-            anchor = (np.random.randint(0, time - 2), np.random.randint(0, h - size), np.random.randint(0, w - size))
+            anchor = (np.random.randint(0, time - length), np.random.randint(0, h - size), np.random.randint(0, w - size))
             image = np.empty((length, size, size, 3))
+            print(anchor)
             for j in range(length):
                 r = rain_density[anchor[0] + j]
                 x = -np.flip(np.sin(np.deg2rad(wind_dir[anchor[0] + 1 + j])), axis=0)
@@ -252,7 +253,7 @@ def generate_tempoGAN_datasets(rain_density, wind_dir, n=10, length=2, size=64, 
         images[i] += image
 
     if normalize:  # to [0,1] only for rain
-        images[:, :, :, :, 0] = np.array([s[:, :, :, 0] / s[:, :, :, 0].max() for s in images])
+        images[:, :, :, :, 0] = np.array([s[:, :, :, 0] / s[:, :, :, 0][~np.isnan(s[:, :, :, 0])].max() for s in images])
     txt = f"Shape of data: {np.shape(images)}"
     if split is not None:  # split
         if all((r <= 1) & (r >= 0) for r in split):
@@ -268,12 +269,12 @@ def generate_tempoGAN_datasets(rain_density, wind_dir, n=10, length=2, size=64, 
             sys.exit("All split values must be either fractions for percentages or integers.")
 
         txt = txt + f"\n\nTraining set: {np.shape(train)}\nValidation set: {np.shape(xval)}\nTest set: {np.shape(test)}"
-        update_output(txt)
+        #src.update_output(txt)
         return {"train": train,
                 "xval": xval,
                 "test": test, }
     else:  # no split
-        update_output(txt)
+       # src.update_output(txt)
         return images
 
 
@@ -291,9 +292,9 @@ def valid_image(image):
                             ~np.isnan(np.array(frame).flatten())])) <= 8 for frame in image]
     else:  # three channel frames
         # frame is a triplet for tempogan images
-        # only rain channel: [:,:,:,0] (all frames in sequence)
-        junk = [len(set(np.array(frame[:, :, :, 0]).flatten()[
-                            ~np.isnan(np.array(frame[:, :, :, 0]).flatten())])) <= 12 for frame in image]
+        # only rain channel
+        junk = [len(set(np.array(frame[:, :, 0]).flatten()[
+                            ~np.isnan(np.array(frame[:, :, 0]).flatten())])) <= 12 for frame in image]
 
     junk += [len(np.array(frame).flatten()[
                      np.isnan(np.array(frame).flatten())]) > 0.25 * len(np.array(frame).flatten()) for frame in image]
