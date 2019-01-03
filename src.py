@@ -542,7 +542,10 @@ def visualise_data(images, cmap='viridis', facecolor='w'):
     l = np.shape(images)[1]
     for i in range(l):
         plt.subplot(1, l, i + 1)
-        plt.imshow(np.ma.masked_where(images[n][i] < 0, images[n][i]), cmap=cmap)
+        if len(np.shape(images)) > 4:  # multi-cannel images
+            plt.imshow(images[n, i, :, :, 0], cmap=cmap)
+        else:
+            plt.imshow(np.ma.masked_where(images[n][i] < 0, images[n][i]), cmap=cmap)
         plt.title(f"Instance #{n+1} from {num_img}\nFrame: {i}")
     plt.subplots_adjust(hspace=0.3, wspace=0.3)
 
