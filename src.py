@@ -232,13 +232,12 @@ def generate_tempoGAN_datasets(rain_density, wind_dir, n=10, length=2, size=64, 
     images = np.zeros(
         (n, length, size, size, 3))  # n series, each of size size**2 and rho,vx,vy,future frames as channels
     for i in range(n):
-        print(f"[{i+1}/{n}]")
+        update_output(f"[{i+1}/{n}]")
         # draw 3 random numbers for map number and idx of top left pixel of window
         valid = 0
         while not valid:
             anchor = (np.random.randint(0, time - length), np.random.randint(0, h - size), np.random.randint(0, w - size))
             image = np.empty((length, size, size, 3))
-            print(anchor)
             for j in range(length):
                 r = rain_density[anchor[0] + j]
                 x = -np.flip(np.sin(np.deg2rad(wind_dir[anchor[0] + 1 + j])), axis=0)
@@ -269,12 +268,12 @@ def generate_tempoGAN_datasets(rain_density, wind_dir, n=10, length=2, size=64, 
             sys.exit("All split values must be either fractions for percentages or integers.")
 
         txt = txt + f"\n\nTraining set: {np.shape(train)}\nValidation set: {np.shape(xval)}\nTest set: {np.shape(test)}"
-        #src.update_output(txt)
+        update_output(txt)
         return {"train": train,
                 "xval": xval,
                 "test": test, }
     else:  # no split
-       # src.update_output(txt)
+        update_output(txt)
         return images
 
 
