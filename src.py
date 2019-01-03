@@ -279,7 +279,7 @@ def generate_tempoGAN_datasets(rain_density, wind_dir, n=10, length=2, size=64, 
 
 def valid_image(image):
     """
-    Filters out some useless data. in the junk variable several conditions are defined to check on the images.
+    Filters out some useless data. In the junk variable several conditions are defined to check on the images.
     Currently it checks the number of different entry values and if 0s or 1s make up 0.75 part of the whole data.
     This throws out the cuts made inside or almost inside the mask region and rainless areas.
     Still can be improved.
@@ -291,9 +291,9 @@ def valid_image(image):
                             ~np.isnan(np.array(frame).flatten())])) <= 8 for frame in image]
     else:  # three channel frames
         # frame is a triplet for tempogan images
-        # only rain channel
-        junk = [len(set(np.array(frame[:, :, 0]).flatten()[
-                            ~np.isnan(np.array(frame[:, :, 0]).flatten())])) <= 8 for frame in image]
+        # only rain channel: [:,:,:,0] (all frames in sequence)
+        junk = [len(set(np.array(frame[:, :, :, 0]).flatten()[
+                            ~np.isnan(np.array(frame[:, :, :, 0]).flatten())])) <= 12 for frame in image]
 
     junk += [len(np.array(frame).flatten()[
                      np.isnan(np.array(frame).flatten())]) > 0.25 * len(np.array(frame).flatten()) for frame in image]
