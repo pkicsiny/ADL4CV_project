@@ -60,18 +60,62 @@ def get_data(data_dir, which="h", total_length=None, mask=True):
 def load_datasets(dataset="5min"):
     """
     If the data is already saved in numpy (.npy) file then use this to load it.
-    :param dataset: str, which data: hourly or 5 minutes resolution
-    :return: train, validation, test sets. Each sample has two channels: time t and t+1
+    :param dataset: str, which data: hourly or 5 minutes resolution or data for the dual discriminator gan (hourly too)
+    :return: train, validation, test sets.
     """
-    if dataset in ["5m", "5min", "5minutes", "5minute"]:
-        images = np.load(sys.path[0]+"/5_minute.npy").item()
-    elif dataset in ["h", "hourly"]:
-        images = np.load(sys.path[0]+"/hourly.npy").item()
-    train = np.reshape(images["train"], np.shape(images["train"])+(1,))
-    xval = np.reshape(images["xval"], np.shape(images["xval"])+(1,))
-    test = np.reshape(images["test"], np.shape(images["test"])+(1,))
+    if dataset in ["temporal", "tempogan", "tampoGAN", "gan", "GAN"]:
+        train = np.load(sys.path[0]+"/tempoGAN_train.npy")
+        xval = np.load(sys.path[0]+"/tempoGAN_xval.npy")
+        test = np.load(sys.path[0]+"/tempoGAN_test.npy")
+    else:
+        if dataset in ["5m", "5min", "5minutes", "5minute"]:
+            images = np.load(sys.path[0]+"/5_minute.npy").item()
+        elif dataset in ["h", "hourly"]:
+            images = np.load(sys.path[0]+"/hourly.npy").item()
+        train = np.reshape(images["train"], np.shape(images["train"])+(1,))
+        xval = np.reshape(images["xval"], np.shape(images["xval"])+(1,))
+        test = np.reshape(images["test"], np.shape(images["test"])+(1,))
     print(f"Training data: {train.shape}\nValidation data: {xval.shape}\nTest data: {test.shape}")
     return train, xval, test
+
+
+def split_datasets(train, xval, test, past_frames=1, future_frames=1):
+    """
+    Further splits data to input and ground truth datasets.
+    :param train: numpy array of training dataset
+    :param xval: numpy array of validation dataset
+    :param test: numpy array of test dataset
+    :param past_frames: int, no. of consec. frames that will be the input of the network
+    :param future_frames: int, no. of consec. frames that will be the ground truth of the network
+    :return: 6 numpy arrays
+    """
+    assert past_frames + future_frames <= train.shape[1], "Wrong frame specification!"
+    assert past_frames > 0, "No. of past frames must be a positive integer!"
+    assert future_frames > 0, "No. of future frames must be a positive integer!"
+    training_data = np.reshape(train[:, :past_frames, :, :, :],
+                               ((train.shape[0],) + train.shape[2:]) if past_frames == 1 else (
+                               (train.shape[0], past_frames) + train.shape[2:]))
+    trainig_data_truth = np.reshape(train[:, past_frames:past_frames + future_frames, :, :, :],
+                                    ((train.shape[0],) + train.shape[2:]) if future_frames == 1 else (
+                                    (train.shape[0], future_frames) + train.shape[2:]))
+    validation_data = np.reshape(xval[:, :past_frames, :, :, :],
+                                 ((xval.shape[0],) + xval.shape[2:]) if past_frames == 1 else (
+                                 (xval.shape[0], past_frames) + xval.shape[2:]))
+    validation_data_truth = np.reshape(xval[:, past_frames:past_frames + future_frames, :, :, :],
+                                       ((xval.shape[0],) + xval.shape[2:]) if future_frames == 1 else (
+                                       (xval.shape[0], future_frames) + xval.shape[2:]))
+    test_data = np.reshape(test[:, :past_frames, :, :, :],
+                           ((test.shape[0],) + test.shape[2:]) if past_frames == 1 else (
+                           (test.shape[0], past_frames) + test.shape[2:]))
+    test_data_truth = np.reshape(test[:, past_frames:past_frames + future_frames, :, :, :],
+                                 ((test.shape[0],) + test.shape[2:]) if future_frames == 1 else (
+                                 (test.shape[0], future_frames) + test.shape[2:]))
+
+    print("Shape of training data: ", training_data.shape, "\nShape of training truth: ", trainig_data_truth.shape,
+          "\nShape of validation data: ", validation_data.shape, "\nShape of validation truth: ",
+          validation_data_truth.shape,
+          "\nShape of test data: ", test_data.shape, "\nShape of test truth: ", test_data_truth.shape)
+    return training_data, trainig_data_truth, validation_data, validation_data_truth, test_data, test_data_truth
 
 
 def get_rain_grid_coords(directory="rain_grid_coordinates"):
@@ -130,6 +174,7 @@ def mask_data(what, index=100):
 
 def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=False, task="prediction", down_factor=4):
     """
+    Use this if you cannot use load_datasets() bc. there are no saved files but you have the dataset imported.
     Splits input array into training, cross validation and test sets.
     :param array: 3D np array, dataset to be split. This is a channel*900*900 large array of rain radar maps.
     Data is created by cutting size*size frames randomly from length consecutive map.
@@ -538,13 +583,16 @@ def visualise_data(images, cmap='viridis', facecolor='w'):
     n = np.random.randint(0, num_img)
 
     plt.figure(num=None, dpi=80, facecolor=facecolor)
-    l = np.shape(images)[1]
+    if len(np.shape(images)) == 5:
+        l = np.shape(images)[1]
+    else:
+        l=1
     for i in range(l):
         plt.subplot(1, l, i + 1)
-        if len(np.shape(images)) > 4:  # multi-cannel images
+        if len(np.shape(images)) == 5:  # multi-cannel images
             plt.imshow(images[n, i, :, :, 0], cmap=cmap)
         else:
-            plt.imshow(np.ma.masked_where(images[n][i] < 0, images[n][i]), cmap=cmap)
+            plt.imshow(np.ma.masked_where(images[n,:,:,0] < 0, images[n,:,:,0]), cmap=cmap)
         plt.title(f"Instance #{n+1} from {num_img}\nFrame: {i}")
     plt.subplots_adjust(hspace=0.3, wspace=0.3)
 
