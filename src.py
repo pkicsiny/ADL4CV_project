@@ -67,11 +67,13 @@ def load_datasets(dataset="5min"):
         train = np.load(sys.path[0]+"/tempoGAN_train.npy")
         xval = np.load(sys.path[0]+"/tempoGAN_xval.npy")
         test = np.load(sys.path[0]+"/tempoGAN_test.npy")
-    else:
-        if dataset in ["5m", "5min", "5minutes", "5minute"]:
-            images = np.load(sys.path[0]+"/5_minute.npy").item()
-        elif dataset in ["h", "hourly"]:
-            images = np.load(sys.path[0]+"/hourly.npy").item()
+    if dataset in ["5m", "5min", "5minutes", "5minute"]:
+            # images = np.load(sys.path[0]+"/5_minute.npy").item()
+            train = np.load(sys.path[0] + "/5min_train.npy")
+            xval = np.load(sys.path[0] + "/5min_xval.npy")
+            test = np.load(sys.path[0] + "/5min_test.npy")
+    if dataset in ["h", "hourly"]:
+        images = np.load(sys.path[0]+"/hourly.npy").item()
         train = np.reshape(images["train"], np.shape(images["train"])+(1,))
         xval = np.reshape(images["xval"], np.shape(images["xval"])+(1,))
         test = np.reshape(images["test"], np.shape(images["test"])+(1,))
@@ -79,37 +81,40 @@ def load_datasets(dataset="5min"):
     return train, xval, test
 
 
-def split_datasets(train, xval, test, past_frames=1, future_frames=1):
+def reduce_dims(images):
     """
-    Further splits data to input and ground truth datasets.
-    :param train: numpy array of training dataset
-    :param xval: numpy array of validation dataset
-    :param test: numpy array of test dataset
+    :param images: data with 5 dimensions
+    :return: same data with 4 dimensions, the images have been split along the t axis and reconcatenated along the
+    last (channel) axis: (1000, t, 64, 64, 1) -> (1000, 64, 64, t)
+    """
+    if len(images.shape) > 4:
+        # sequence (t axis)is defined as a separate dim than channel -> make the sequence dim to be the channel dim
+        images = np.concatenate([images[:, t, :, :, :] for t in len(images.shape[1])], axis=-1)
+    return images
+
+
+def split_datasets(train, xval, test, past_frames=1, future_frames=1, augment=False):
+    """
+    Further splits data to input and ground truth datasets. If the data has rain and wind velocity maps, they must be
+    in the last channel so everything here compiles for them automatically.
+    :param train: numpy array of training dataset, shape: (n, w, h, c)
+    :param xval: numpy array of validation dataset, shape: (n, w, h, c)
+    :param test: numpy array of test dataset, shape: (n, w, h, c)
     :param past_frames: int, no. of consec. frames that will be the input of the network
     :param future_frames: int, no. of consec. frames that will be the ground truth of the network
+    :param augment: bool, if True, uses data augmentation by flip and rotation -> 8*(# of data)
     :return: 6 numpy arrays
     """
     assert past_frames + future_frames <= train.shape[1], "Wrong frame specification!"
     assert past_frames > 0, "No. of past frames must be a positive integer!"
     assert future_frames > 0, "No. of future frames must be a positive integer!"
-    training_data = np.reshape(train[:, :past_frames, :, :, :],
-                               ((train.shape[0],) + train.shape[2:]) if past_frames == 1 else (
-                               (train.shape[0], past_frames) + train.shape[2:]))
-    trainig_data_truth = np.reshape(train[:, past_frames:past_frames + future_frames, :, :, :],
-                                    ((train.shape[0],) + train.shape[2:]) if future_frames == 1 else (
-                                    (train.shape[0], future_frames) + train.shape[2:]))
-    validation_data = np.reshape(xval[:, :past_frames, :, :, :],
-                                 ((xval.shape[0],) + xval.shape[2:]) if past_frames == 1 else (
-                                 (xval.shape[0], past_frames) + xval.shape[2:]))
-    validation_data_truth = np.reshape(xval[:, past_frames:past_frames + future_frames, :, :, :],
-                                       ((xval.shape[0],) + xval.shape[2:]) if future_frames == 1 else (
-                                       (xval.shape[0], future_frames) + xval.shape[2:]))
-    test_data = np.reshape(test[:, :past_frames, :, :, :],
-                           ((test.shape[0],) + test.shape[2:]) if past_frames == 1 else (
-                           (test.shape[0], past_frames) + test.shape[2:]))
-    test_data_truth = np.reshape(test[:, past_frames:past_frames + future_frames, :, :, :],
-                                 ((test.shape[0],) + test.shape[2:]) if future_frames == 1 else (
-                                 (test.shape[0], future_frames) + test.shape[2:]))
+    training_data = augment_data(train[:, :, :, :past_frames]) if augment else train[:, :, :, :past_frames]
+    trainig_data_truth = augment_data(train[:, :, :, past_frames:past_frames + future_frames]) if augment else train[
+                                                                    :, :, :, past_frames:past_frames + future_frames]
+    validation_data = xval[:, :, :, :past_frames]
+    validation_data_truth = xval[:, :, :, past_frames:past_frames + future_frames]
+    test_data = test[:, :, :, :past_frames]
+    test_data_truth = test[:, :, :, past_frames:past_frames + future_frames]
 
     print("Shape of training data: ", training_data.shape, "\nShape of training truth: ", trainig_data_truth.shape,
           "\nShape of validation data: ", validation_data.shape, "\nShape of validation truth: ",
@@ -146,11 +151,11 @@ def get_germany(w_vel, coords):
     germany = pd.DataFrame(data={'LAT':w_vel['lat'][:][~w_vel['FF'][0].mask],
                              'LON':w_vel['lon'][:][~w_vel['FF'][0].mask],
                              'CELL_ID':pd.DataFrame(w_vel['FF'][0].flatten()).dropna().index.values})[['LAT', 'LON', "CELL_ID"]]
-    #get closest radar grid cell to each wind cell
+    # get closest radar grid cell to each wind cell
     germany["closest_idx"] = -1
     for i, point in enumerate(germany["CELL_ID"]):
         update_output(f"[{i}/{len(germany)}]")
-        #dists = germany.iloc[point][["LAT","LON"]] - coords[["LAT","LON"]]
+        # dists = germany.iloc[point][["LAT","LON"]] - coords[["LAT","LON"]]
         germany["closest_idx"].iloc[point] = np.sqrt((germany.iloc[point]["LAT"] - coords["LAT"])**2 +
                                                      (germany.iloc[point]["LON"] - coords["LON"])**2).idxmin()
     with open('germany.pickle', 'wb') as handle:
@@ -172,11 +177,14 @@ def mask_data(what, index=100):
     return what
 
 
-def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=False, task="prediction", down_factor=4):
+def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, normalize=False, task="prediction",
+                      down_factor=4):
     """
-    Use this if you cannot use load_datasets() bc. there are no saved files but you have the dataset imported.
+    Use this if you cannot use load_datasets() bc. there are no saved files but you have the raw data imported.
     Splits input array into training, cross validation and test sets.
-    :param array: 3D np array, dataset to be split. This is a channel*900*900 large array of rain radar maps.
+    :param rain: 3D np array, dataset to be split. This is a channel*height*width large array of rain radar maps.
+    Data is created by cutting size*size frames randomly from length consecutive map.
+    :param wind: 3D np array, dataset to be split. This is a channel*height*width large array of wind radar maps.
     Data is created by cutting size*size frames randomly from length consecutive map.
     :param n: int, total number of data instances to make
     :param size: int, height and width in pixels of each frame
@@ -184,33 +192,68 @@ def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=Fals
     :param split: list or np array of either floats between 0 and 1 or positive integers. Set to None by deafult
     which means no splitting, just return all instances in one set.
     :return: 3D np array, either one dataset of smaller image frames or three datasets for training,
-    cross validating and testing
+    cross validating and testing. shape is: (n, h, w, c) If wind is given, shape will be (n, h, w, c, m) where m=3
+    is the weather measurable: rho, vx, vy
     """
-    ch = np.shape(array)[0]
-    h = np.shape(array)[1]
-    w = np.shape(array)[2]
+    ch = np.shape(rain)[0]
+    if wind is not None:
+        # wind timestamps are taken at xx:00:00 but rain is taken at xx:50:00
+        # so I take the next index for the wind maps
+        ch -= 1
+    h = np.shape(rain)[1]
+    w = np.shape(rain)[2]
 
     if task == "upsampling":
         length = 1
     elif task != "prediction":
         sys.exit("Task must be 'prediction' or 'upsampling'.")
 
-    images = np.empty((n, length, size, size))  # n series, each consisting of length frames of size size**2
+    if wind is None:
+        images = np.empty((n, size, size, length))  # n series, each consisting of length frames of size size**2
+    else:
+        images = np.empty((n, size, size, length, 3))  # extra dim for rain and wind maps
+
     for i in range(n):
+        update_output(f"[{i+1}/{n}]")
         # draw 3 random numbers for map number and idx of top left pixel of window
         valid = 0
+        if wind is not None:
+            image = np.empty((length, size, size, 3))
+        else:
+            image = np.empty((length, size, size))
+
         while not valid:
             anchor = (np.random.randint(0, ch - length), np.random.randint(0, h - size), np.random.randint(0, w - size))
-            # update_output(f"Cutting images...\n[{i+1}/{n}]")
-            image = [ar[anchor[1]:anchor[1] + size,
-                     anchor[2]:anchor[2] + size] for ar in np.asarray(array)[anchor[0]:anchor[0] + length]]
-            image[image <= 0] = np.nan() # replace mask values with nan
-            valid = valid_image(image)
-        images[i] = image
-
-    # normalization each sequence
-    if normalize:
-        images = np.array([s/s.max() for s in images])
+            for j in range(length):
+                rain_cut = rain[anchor[0] + j]
+                if wind is not None:
+                    image[j, :, :, 0] = rain_cut[anchor[1]:anchor[1] + size,
+                                        anchor[2]:anchor[2] + size]  # .filled(np.nan)
+                else:
+                    image[j, :, :] = rain_cut[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size]
+                    image[j, :, :][image[j, :, :] < 0] = np.nan
+            # masked array will get unmasked and nans become huge values
+            image[(np.isnan(image)) | (image > 1e5)] = np.nan
+            if wind is not None:
+                valid = valid_image(image[:, :, :, 0])
+            else:
+                valid = valid_image(image)
+        # valid image found, append to final array
+        if wind is None:
+            images[i] = np.transpose(image / np.array(image[image < 1e5]).max(),
+                                     (1, 2, 0)) if normalize else np.transpose(image, (1, 2, 0))
+        else:
+            # get wind data
+            for k in range(length):
+                vx = -np.flip(np.sin(np.deg2rad(wind[anchor[0] + 1 + k])), axis=0)
+                vy = -np.flip(np.cos(np.deg2rad(wind[anchor[0] + 1 + k])), axis=0)
+                image[k, :, :, 1] = vx[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan)
+                image[k, :, :, 2] = vy[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan)
+            image[(np.isnan(image)) | (image > 1e5)] = np.nan
+            if normalize:
+                image[:, :, :, 0] = image[:, :, :, 0] / image[:, :, :, 0][image[:, :, :, 0] < 1e5].max()
+            # transpose images to have channel as second last dim
+            images[i] = np.transpose(image, (1, 2, 0, 3))
 
     txt = f"Shape of data: {np.shape(images)}"
     if split is not None:  # split
@@ -228,11 +271,11 @@ def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=Fals
 
         txt = txt + f"\n\nTraining set: {np.shape(train)}\nValidation set: {np.shape(xval)}\nTest set: {np.shape(test)}"
         if task == "upsampling":  # downsample
-            low_res_train, low_res_xval, low_res_test = [data[:, :, ::down_factor, ::down_factor] for data in
+            low_res_train, low_res_xval, low_res_test = [data[:, ::down_factor, ::down_factor] for data in
                                                          [train, xval, test]]
             update_output(txt + f"\n\nShape of downsampled data:\n\n" +
-                                f"Training set: {np.shape(low_res_train)}\n" +
-                                f"Validation set: {np.shape(low_res_xval)}\nTest set: {np.shape(low_res_test)}")
+                          f"Training set: {np.shape(low_res_train)}\n" +
+                          f"Validation set: {np.shape(low_res_xval)}\nTest set: {np.shape(low_res_test)}")
             return {"low_res_train": low_res_train,
                     "low_res_xval": low_res_xval,
                     "low_res_test": low_res_test,
@@ -244,82 +287,12 @@ def generate_datasets(array, n=10, size=64, length=3, split=None, normalize=Fals
             return {"train": train, "xval": xval, "test": test}
     else:  # no split
         if task == "upsampling":  # downsample
-            low_res_data = images[:, :, ::down_factor, ::down_factor]
+            low_res_data = images[:, ::down_factor, ::down_factor]
             update_output(txt + f"\nShape of downsampled data: {np.shape(low_res_data)}")
             return {"low_res_data": low_res_data, "images": images}  # data and ground truth
         else:
             update_output(txt)
             return {"images": images}
-
-
-def generate_tempoGAN_datasets(rain_density, wind_dir, n=10, length=2, size=64, split=None, normalize=False):
-    """
-    Splits input array into training, cross validation and test sets.
-    :param rain_density: .nc file containing interpolated rain maps on wind grid. A masked np array of shape
-     744*938*720.
-    :param wind_dir: same as the rain but these are the wind maps on the same grid. They have the same shape. The
-    vx and vy channels are calculated from this.
-    :param n: int, total number of data instances to make
-    :param length: int, number of consecutive frames on time axis to cut. It cuts length frames from all three channels.
-    (rho, vx, vy)
-    :param size: int, height and width in pixels of each frame
-    :param split: list or np array of either floats between 0 and 1 or positive integers. Set to None by deafult
-    which means no splitting, just return all instances in one set.
-    :param normalize: boolean, if true, the rain maps will be normalized between [0,1]. They are simply divided by the
-    max pixel value in the series. (Wind is always between [-1,1])
-    :return: 3D np array, either one dataset of smaller image frames or three datasets for training,
-    cross validating and testing
-    """
-    time = 743
-    h = rain_density[0].shape[0]  # 938
-    w = rain_density[0].shape[1]  # 720
-
-    images = np.zeros(
-        (n, length, size, size, 3))  # n series, each of size size**2 and rho,vx,vy,future frames as channels
-    for i in range(n):
-        update_output(f"[{i+1}/{n}]")
-        # draw 3 random numbers for map number and idx of top left pixel of window
-        valid = 0
-        while not valid:
-            anchor = (np.random.randint(0, time - length), np.random.randint(0, h - size), np.random.randint(0, w - size))
-            image = np.empty((length, size, size, 3))
-            for j in range(length):
-                r = rain_density[anchor[0] + j]
-                x = -np.flip(np.sin(np.deg2rad(wind_dir[anchor[0] + 1 + j])), axis=0)
-                y = -np.flip(np.cos(np.deg2rad(wind_dir[anchor[0] + 1 + j])), axis=0)
-                image[j, :, :, 0] = r[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan)
-                image[j, :, :, 1] = x[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan)
-                image[j, :, :, 2] = y[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan)
-            # first channel is the current frame, the next two are the wind x and y components where the index is shifted by 1
-            # because the rain dates are in xx:50 resolution but the wind is in xx:00. The next channels are the next rain fields
-            # to be predicted
-            valid = valid_image(image)
-        images[i] += image
-
-    if normalize:  # to [0,1] only for rain
-        images[:, :, :, :, 0] = np.array([s[:, :, :, 0] / s[:, :, :, 0][~np.isnan(s[:, :, :, 0])].max() for s in images])
-    txt = f"Shape of data: {np.shape(images)}"
-    if split is not None:  # split
-        if all((r <= 1) & (r >= 0) for r in split):
-            assert (sum(split) == 1), "Split values must sum up to 1."
-            train = images[:int(n * split[0])]
-            xval = images[int(n * split[0]):int(n * (split[0] + split[1]))]
-            test = images[int(n * (split[0] + split[1])):]
-        elif all(isinstance(r, int) for r in split):
-            train = images[:int(n * split[0] / sum(split))]
-            xval = images[int(n * split[0] / sum(split)):int(n * (split[0] + split[1]) / sum(split))]
-            test = images[int(n * (split[0] + split[1]) / sum(split)):]
-        else:
-            sys.exit("All split values must be either fractions for percentages or integers.")
-
-        txt = txt + f"\n\nTraining set: {np.shape(train)}\nValidation set: {np.shape(xval)}\nTest set: {np.shape(test)}"
-        update_output(txt)
-        return {"train": train,
-                "xval": xval,
-                "test": test, }
-    else:  # no split
-        update_output(txt)
-        return images
 
 
 def valid_image(image):
@@ -331,18 +304,38 @@ def valid_image(image):
     :param image: 3D np array, dimensions are the number of consecutive frames, height and width
     :return: bool, whether the data instance is valid in terms of usability
     """
-    if len(np.shape(image)) == 3:  # one channel frames
-        junk = [len(set(np.array(frame).flatten()[
-                            ~np.isnan(np.array(frame).flatten())])) <= 8 for frame in image]
-    else:  # three channel frames
-        # frame is a triplet for tempogan images
-        # only rain channel
-        junk = [len(set(np.array(frame[:, :, 0]).flatten()[
-                            ~np.isnan(np.array(frame[:, :, 0]).flatten())])) <= 12 for frame in image]
-
+    junk = [len(set(np.array(frame).flatten()[
+                        np.array(frame).flatten() < 1e5])) <= 8 for frame in image]
     junk += [len(np.array(frame).flatten()[
-                     np.isnan(np.array(frame).flatten())]) > 0.25 * len(np.array(frame).flatten()) for frame in image]
+                     np.array(frame).flatten() < 1e5]) < 0.75 * len(np.array(frame).flatten()) for frame in image]
     return 0 if any(junk) else 1
+
+"""
+DATA AUGMENTATION
+"""
+
+def augment_data(data):
+    #dimensions are n, h, w, c
+    print("Data augmentig done.")
+    return np.reshape([np.array([
+        data_sample,
+        rotate(data_sample, "90"),
+        rotate(data_sample, "180"),
+        rotate(data_sample, "270"),
+        np.flip(data_sample, axis=1),
+        np.flip(rotate(data_sample, "90"), axis=1),
+        np.flip(rotate(data_sample, "180"), axis=1),
+        np.flip(rotate(data_sample, "270"), axis=1)]) for data_sample in data], ((data.shape[0]*8,)+data.shape[1:]))
+
+def rotate(img, degree):
+
+    assert degree in ["90","-270", "180", "-90", "270"], "Rotation degree must be in: [90, 180, 270, -90, -270]"
+    rotated = np.rot90(img)
+    if degree in ["180", "-90", "270"]:
+        rotated = np.rot90(rotated)
+    if degree in ["-90", "270"]:
+        rotated = np.rot90(rotated)
+    return rotated
 
 """
 UTILS
@@ -402,6 +395,124 @@ def update_output(string):
     """
     clear_output(wait=True)
     print(string)
+
+"""
+NETWORKS
+"""
+
+
+def unet(input_shape=(64, 64, 1), output_shape=(64, 64, 1)):
+    init = keras.layers.Input(shape=input_shape)
+    ConvDown1 = keras.layers.Conv2D(filters=8, kernel_size=(2, 2), strides=(1, 1), padding="same")(init)
+    Lr1 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown1)
+    # 64
+    ConvDown2 = keras.layers.Conv2D(filters=16, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr1)
+    Lr2 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown2)
+    # 32
+    ConvDown3 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr2)
+    Lr3 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown3)
+    # 16
+    ConvDown4 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr3)
+    Lr4 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown4)
+    # 8
+    ConvDown5 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr4)
+    Lr5 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown5)
+    # 4
+
+    UpSamp1 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr5)
+    # 8
+    merge1 = keras.layers.concatenate([ConvDown4, UpSamp1], axis=-1)  # (UpSamp1)
+    Conv1 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge1)
+    Lr6 = keras.layers.LeakyReLU(alpha=0.1)(Conv1)
+    # 8
+    UpSamp2 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr6)
+    # 16
+    merge2 = keras.layers.concatenate([ConvDown3, UpSamp2], axis=-1)  # (UpSamp2)
+    Conv2 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge2)
+    Lr7 = keras.layers.LeakyReLU(alpha=0.1)(Conv2)
+    # 16
+    UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr7)
+
+    # 32
+    Conv3 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(UpSamp3)
+    Lr8 = keras.layers.LeakyReLU(alpha=0.1)(Conv3)
+
+    UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr8)
+    # 64
+    Conv4 = keras.layers.Conv2D(filters=8, kernel_size=(4, 4), strides=(1, 1), padding="same")(UpSamp4)
+    Lr9 = keras.layers.LeakyReLU(alpha=0.1)(Conv4)
+
+    Conv5 = keras.layers.Conv2D(filters=output_shape[-1], kernel_size=(4, 4), strides=(1, 1),
+                                padding="same", activation='tanh')(Lr9)
+
+    return keras.models.Model(inputs=init, outputs=Conv5)
+
+
+def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1)):
+    dropout = 0.5
+    # condition is the frame t (the original frame) in both cases
+    condition = keras.layers.Input(shape=condition_shape)
+    # other is the generated prediction of frame t+1 or the ground truth frame t+1
+    other = keras.layers.Input(shape=input_shape)
+    # Concatenate image and conditioning image by channels to produce input
+    combined_imgs = keras.layers.Concatenate(axis=-1)([condition, other])
+
+    conv1 = keras.layers.Conv2D(filters=4, kernel_size=4, strides=2, padding='same')(combined_imgs)
+    relu1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
+    dropout1 = keras.layers.Dropout(dropout)(relu1)
+
+    conv2 = keras.layers.Conv2D(filters=8, kernel_size=4, strides=2, padding='same')(dropout1)
+    relu2 = keras.layers.LeakyReLU(alpha=0.2)(conv2)
+    dropout2 = keras.layers.Dropout(dropout)(relu2)
+
+    conv3 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(dropout2)
+    relu3 = keras.layers.LeakyReLU(alpha=0.2)(conv3)
+    dropout3 = keras.layers.Dropout(dropout)(relu3)
+
+    conv4 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(dropout3)
+    relu4 = keras.layers.LeakyReLU(alpha=0.2)(conv4)
+    dropout4 = keras.layers.Dropout(dropout)(relu4)
+
+    # Out: 1-dim probability
+    flatten = keras.layers.Flatten()(dropout4)
+    fcl1 = keras.layers.Dense(1)(flatten)
+    sig1 = keras.layers.Activation('sigmoid', name="s_disc_output")(fcl1)
+
+    return keras.models.Model(inputs=[condition, other], outputs=sig1)
+
+
+def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1)):
+    dropout = 0.5
+    # A(G(x_{t-1})) or A(y_{t-1}) (A(frame t)=frame t+1)
+    advected = keras.layers.Input(shape=advected_shape)
+    # other is the generated prediction of t (frame t+1) or the ground truth of t (frame t+1)
+    other = keras.layers.Input(shape=input_shape)
+    # Concatenate image and conditioning image by channels to produce input
+    combined_imgs = keras.layers.Concatenate(axis=-1)([advected, other])
+
+    conv1 = keras.layers.Conv2D(filters=4, kernel_size=4, strides=2, padding='same')(combined_imgs)
+    relu1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
+    dropout1 = keras.layers.Dropout(dropout)(relu1)
+
+    conv2 = keras.layers.Conv2D(filters=8, kernel_size=4, strides=2, padding='same')(dropout1)
+    relu2 = keras.layers.LeakyReLU(alpha=0.2)(conv2)
+    dropout2 = keras.layers.Dropout(dropout)(relu2)
+
+    conv3 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(dropout2)
+    relu3 = keras.layers.LeakyReLU(alpha=0.2)(conv3)
+    dropout3 = keras.layers.Dropout(dropout)(relu3)
+
+    conv4 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(dropout3)
+    relu4 = keras.layers.LeakyReLU(alpha=0.2)(conv4)
+    dropout4 = keras.layers.Dropout(dropout)(relu4)
+
+    # Out: 1-dim probability
+    flatten = keras.layers.Flatten()(dropout4)
+    fcl1 = keras.layers.Dense(1)(flatten)
+    sig1 = keras.layers.Activation('sigmoid', name="t_disc_output")(fcl1)
+
+    return keras.models.Model(inputs=[advected, other], outputs=sig1)
+
 
 """
 LOSS FUNCTIONS
@@ -624,11 +735,12 @@ def error_distribution(truth, predictions, nbins=20, metric="difference"):
     return error_images, error_vals, error_means
 
 
-def result_plotter(indices, datasets):
+def result_plotter(indices, datasets, save=True):
     """
     Plots result images.
     :param indices: list of integers. These are the indices of the images of the result.
     :param datasets: list of arrays.
+    :param save: bool, save figures
     """
     title = ['Frame t', 'Frame t+1', 'Prediction t+1', 'Pixelwise difference']
     for i in indices:
@@ -640,7 +752,8 @@ def result_plotter(indices, datasets):
             ax.set_title(f"{title[j]}", fontsize=10)
             colorbar(im)
             ax.axis('off')
-        plt.savefig(f"Plots/Sample_{i}.png")
+        if save:
+            plt.savefig(f"Plots/Sample_{i}.png")
     plt.show()
 
 
