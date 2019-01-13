@@ -4,6 +4,7 @@ import pandas as pd
 import sys
 import re
 import pickle
+import io
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 import tensorflow as tf
@@ -57,26 +58,22 @@ def get_data(data_dir, which="h", total_length=None, mask=True):
     return inputs
 
 
-def load_datasets(dataset="5min"):
+def load_datasets(dataset="5min", past_frames=1, future_frames=1):
     """
-    If the data is already saved in numpy (.npy) file then use this to load it.
+    If the data is already saved in .npz file then use this to load it.
     :param dataset: str, which data: hourly or 5 minutes resolution or data for the dual discriminator gan (hourly too)
+    :param past_frames: int, no. of past frames
+    :param future_frames: int, no. of predictable frames
     :return: train, validation, test sets.
     """
     if dataset in ["temporal", "tempogan", "tampoGAN", "gan", "GAN"]:
-        train = np.load(sys.path[0]+"/tempoGAN_train.npy")
-        xval = np.load(sys.path[0]+"/tempoGAN_xval.npy")
-        test = np.load(sys.path[0]+"/tempoGAN_test.npy")
+        train = decompress_data(filename=sys.path[0] + "/tempoGAN_train_compressed.npz")[:,:,:,:past_frames+future_frames]
+        xval = decompress_data(filename=sys.path[0] + "/tempoGAN_xval_compressed.npz")[:,:,:,:past_frames+future_frames]
+        test = decompress_data(filename=sys.path[0] + "/tempoGAN_test_compressed.npz")[:,:,:,:past_frames+future_frames]
     if dataset in ["5m", "5min", "5minutes", "5minute"]:
-            # images = np.load(sys.path[0]+"/5_minute.npy").item()
-            train = np.load(sys.path[0] + "/5min_train.npy")
-            xval = np.load(sys.path[0] + "/5min_xval.npy")
-            test = np.load(sys.path[0] + "/5min_test.npy")
-    if dataset in ["h", "hourly"]:
-        images = np.load(sys.path[0]+"/hourly.npy").item()
-        train = np.reshape(images["train"], np.shape(images["train"])+(1,))
-        xval = np.reshape(images["xval"], np.shape(images["xval"])+(1,))
-        test = np.reshape(images["test"], np.shape(images["test"])+(1,))
+            train = decompress_data(filename=sys.path[0] + "/5min_train_compressed.npz")[:,:,:,:past_frames+future_frames]
+            xval = decompress_data(filename=sys.path[0] + "/5min_xval_compressed.npz")[:,:,:,:past_frames+future_frames]
+            test = decompress_data(filename=sys.path[0] + "/5min_test_compressed.npz")[:,:,:,:past_frames+future_frames]
     print(f"Training data: {train.shape}\nValidation data: {xval.shape}\nTest data: {test.shape}")
     return train, xval, test
 
@@ -396,12 +393,32 @@ def update_output(string):
     clear_output(wait=True)
     print(string)
 
+
+def compress_huge_data(huge_data, filename=None):
+    """
+    Compress large data and SAVE it to a .npz compressed file. Requires io package.
+    :param huge_data: file to be compressed
+    :param filename: it has to be a string specifying the path and filename
+    """
+    compressed_array = io.BytesIO()
+    np.savez_compressed(filename,compressed_array, huge_data)
+
+
+def decompress_data(filename=None):
+    """"
+    Loads and decompresses saved data.
+    :param filename: name of saved file
+    :return: decompressed data
+    """
+    return np.load(filename)["arr_1"]
+
+
 """
 NETWORKS
 """
 
 
-def unet(input_shape=(64, 64, 1), output_shape=(64, 64, 1)):
+def unet(input_shape=(64, 64, None)):
     init = keras.layers.Input(shape=input_shape)
     ConvDown1 = keras.layers.Conv2D(filters=8, kernel_size=(2, 2), strides=(1, 1), padding="same")(init)
     Lr1 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown1)
@@ -442,15 +459,15 @@ def unet(input_shape=(64, 64, 1), output_shape=(64, 64, 1)):
     Conv4 = keras.layers.Conv2D(filters=8, kernel_size=(4, 4), strides=(1, 1), padding="same")(UpSamp4)
     Lr9 = keras.layers.LeakyReLU(alpha=0.1)(Conv4)
 
-    Conv5 = keras.layers.Conv2D(filters=output_shape[-1], kernel_size=(4, 4), strides=(1, 1),
+    Conv5 = keras.layers.Conv2D(filters=1, kernel_size=(4, 4), strides=(1, 1),
                                 padding="same", activation='tanh')(Lr9)
 
     return keras.models.Model(inputs=init, outputs=Conv5)
 
 
-def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1)):
+def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, None)):
     dropout = 0.5
-    # condition is the frame t (the original frame) in both cases
+    # condition is the frame t (the original frame) or the sequence of past frames
     condition = keras.layers.Input(shape=condition_shape)
     # other is the generated prediction of frame t+1 or the ground truth frame t+1
     other = keras.layers.Input(shape=input_shape)
@@ -685,25 +702,27 @@ VISUALISATION
 def visualise_data(images, cmap='viridis', facecolor='w'):
     """
     Plots random elements e.g. from training dataset.
-    :param images: 4D np array, image frames to plot. Dimensions: (#data in set, #frames, h, w)
+    :param images: 4D np array, image frames to plot. Dimensions: (n, h, w, t)
     :param cmap: colormap
     :param facecolor: background color
     """
 
     num_img = np.shape(images)[0]
     n = np.random.randint(0, num_img)
+    t = np.shape(images)[3]
 
     plt.figure(num=None, dpi=80, facecolor=facecolor)
-    if len(np.shape(images)) == 5:
-        l = np.shape(images)[1]
-    else:
-        l=1
-    for i in range(l):
-        plt.subplot(1, l, i + 1)
-        if len(np.shape(images)) == 5:  # multi-cannel images
-            plt.imshow(images[n, i, :, :, 0], cmap=cmap)
+    for i in range(t):
+        if len(np.shape(images)) == 5:  # multi-cannel images: wind, rain
+            plt.subplot(3, t, i + 1)
+            plt.imshow(images[n,:, :, i, 0], cmap=cmap)
+            plt.subplot(3, t, t + i + 1)
+            plt.imshow(images[n, :, :, i, 1], cmap=cmap)
+            plt.subplot(3, t, 2*t + i + 1)
+            plt.imshow(images[n, :, :, i, 2], cmap=cmap)
         else:
-            plt.imshow(np.ma.masked_where(images[n,:,:,0] < 0, images[n,:,:,0]), cmap=cmap)
+            plt.subplot(1, t, i + 1)
+            plt.imshow(images[n,:,:,t], cmap=cmap)
         plt.title(f"Instance #{n+1} from {num_img}\nFrame: {i}")
     plt.subplots_adjust(hspace=0.3, wspace=0.3)
 
