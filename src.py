@@ -105,6 +105,8 @@ def split_datasets(train, xval, test, past_frames=1, future_frames=1, augment=Fa
     assert past_frames + future_frames <= train.shape[1], "Wrong frame specification!"
     assert past_frames > 0, "No. of past frames must be a positive integer!"
     assert future_frames > 0, "No. of future frames must be a positive integer!"
+    if augment:
+        print("Data augmentation.")
     training_data = augment_data(train[:, :, :, :past_frames]) if augment else train[:, :, :, :past_frames]
     trainig_data_truth = augment_data(train[:, :, :, past_frames:past_frames + future_frames]) if augment else train[
                                                                     :, :, :, past_frames:past_frames + future_frames]
@@ -313,7 +315,6 @@ DATA AUGMENTATION
 
 def augment_data(data):
     #dimensions are n, h, w, c
-    print("Data augmentig done.")
     return np.reshape([np.array([
         data_sample,
         rotate(data_sample, "90"),
@@ -416,48 +417,54 @@ def decompress_data(filename=None):
 """
 NETWORKS
 """
-
+# "BN denotes batch normalization, which is not used in the
+# last layer of G, the first layer of Dt and the first layer of Ds [Radford et al. 2016]." from tempoGAN paper
 
 def unet(input_shape=(64, 64, 1)):
     init = keras.layers.Input(shape=input_shape)
     ConvDown1 = keras.layers.Conv2D(filters=8, kernel_size=(2, 2), strides=(1, 1), padding="same")(init)
-    Lr1 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown1)
+    Bn1 = keras.layers.BatchNormalization()(ConvDown1)
+    Lr1 = keras.layers.LeakyReLU(alpha=0.1)(Bn1)
     # 64
     ConvDown2 = keras.layers.Conv2D(filters=16, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr1)
-    Lr2 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown2)
+    Bn2 = keras.layers.BatchNormalization()(ConvDown2)
+    Lr2 = keras.layers.LeakyReLU(alpha=0.1)(Bn2)
     # 32
     ConvDown3 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr2)
-    Lr3 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown3)
+    Bn3 = keras.layers.BatchNormalization()(ConvDown3)
+    Lr3 = keras.layers.LeakyReLU(alpha=0.1)(Bn3)
     # 16
     ConvDown4 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr3)
-    Lr4 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown4)
+    Bn4 = keras.layers.BatchNormalization()(ConvDown4)
+    Lr4 = keras.layers.LeakyReLU(alpha=0.1)(Bn4)
     # 8
     ConvDown5 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr4)
-    Lr5 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown5)
+    Bn5 = keras.layers.BatchNormalization()(ConvDown5)
+    Lr5 = keras.layers.LeakyReLU(alpha=0.1)(Bn5)
     # 4
 
+    # 8
     UpSamp1 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr5)
-    # 8
-    merge1 = keras.layers.concatenate([ConvDown4, UpSamp1], axis=-1)  # (UpSamp1)
+    merge1 = keras.layers.concatenate([ConvDown4, UpSamp1], axis=-1)
     Conv1 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge1)
-    Lr6 = keras.layers.LeakyReLU(alpha=0.1)(Conv1)
-    # 8
+    Bn6 = keras.layers.BatchNormalization()(Conv1)
+    Lr6 = keras.layers.LeakyReLU(alpha=0.1)(Bn6)
+    # 16
     UpSamp2 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr6)
-    # 16
-    merge2 = keras.layers.concatenate([ConvDown3, UpSamp2], axis=-1)  # (UpSamp2)
+    merge2 = keras.layers.concatenate([ConvDown3, UpSamp2], axis=-1)
     Conv2 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge2)
-    Lr7 = keras.layers.LeakyReLU(alpha=0.1)(Conv2)
-    # 16
-    UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr7)
-
+    Bn7 = keras.layers.BatchNormalization()(Conv2)
+    Lr7 = keras.layers.LeakyReLU(alpha=0.1)(Bn7)
     # 32
+    UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr7)
     Conv3 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(UpSamp3)
-    Lr8 = keras.layers.LeakyReLU(alpha=0.1)(Conv3)
-
-    UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr8)
+    Bn8 = keras.layers.BatchNormalization()(Conv3)
+    Lr8 = keras.layers.LeakyReLU(alpha=0.1)(Bn8)
     # 64
+    UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr8)
     Conv4 = keras.layers.Conv2D(filters=8, kernel_size=(4, 4), strides=(1, 1), padding="same")(UpSamp4)
-    Lr9 = keras.layers.LeakyReLU(alpha=0.1)(Conv4)
+    Bn9 = keras.layers.BatchNormalization()(Conv4)
+    Lr9 = keras.layers.LeakyReLU(alpha=0.1)(Bn9)
 
     Conv5 = keras.layers.Conv2D(filters=1, kernel_size=(4, 4), strides=(1, 1),
                                 padding="same", activation='tanh')(Lr9)
@@ -466,7 +473,6 @@ def unet(input_shape=(64, 64, 1)):
 
 
 def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1)):
-    dropout = 0.5
     # condition is the frame t (the original frame) or the sequence of past frames
     condition = keras.layers.Input(shape=condition_shape)
     # other is the generated prediction of frame t+1 or the ground truth frame t+1
@@ -475,23 +481,23 @@ def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1)):
     combined_imgs = keras.layers.Concatenate(axis=-1)([condition, other])
 
     conv1 = keras.layers.Conv2D(filters=4, kernel_size=4, strides=2, padding='same')(combined_imgs)
-    relu1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
-    dropout1 = keras.layers.Dropout(dropout)(relu1)
+    Bn1   = keras.layers.BatchNormalization()(conv1)
+    relu1 = keras.layers.LeakyReLU(alpha=0.2)(Bn1)
 
-    conv2 = keras.layers.Conv2D(filters=8, kernel_size=4, strides=2, padding='same')(dropout1)
-    relu2 = keras.layers.LeakyReLU(alpha=0.2)(conv2)
-    dropout2 = keras.layers.Dropout(dropout)(relu2)
+    conv2 = keras.layers.Conv2D(filters=8, kernel_size=4, strides=2, padding='same')(relu1)
+    Bn2   = keras.layers.BatchNormalization()(conv2)
+    relu2 = keras.layers.LeakyReLU(alpha=0.2)(Bn2)
 
-    conv3 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(dropout2)
-    relu3 = keras.layers.LeakyReLU(alpha=0.2)(conv3)
-    dropout3 = keras.layers.Dropout(dropout)(relu3)
+    conv3 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(relu2)
+    Bn3   = keras.layers.BatchNormalization()(conv3)
+    relu3 = keras.layers.LeakyReLU(alpha=0.2)(Bn3)
 
-    conv4 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(dropout3)
-    relu4 = keras.layers.LeakyReLU(alpha=0.2)(conv4)
-    dropout4 = keras.layers.Dropout(dropout)(relu4)
+    conv4 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(relu3)
+    Bn4   = keras.layers.BatchNormalization()(conv4)
+    relu4 = keras.layers.LeakyReLU(alpha=0.2)(Bn4)
 
     # Out: 1-dim probability
-    flatten = keras.layers.Flatten()(dropout4)
+    flatten = keras.layers.Flatten()(relu4)
     fcl1 = keras.layers.Dense(1)(flatten)
     sig1 = keras.layers.Activation('sigmoid', name="s_disc_output")(fcl1)
 
@@ -499,7 +505,7 @@ def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1)):
 
 
 def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1)):
-    dropout = 0.5
+  #  dropout = 0.5
     # A(G(x_{t-1})) or A(y_{t-1}) (A(frame t)=frame t+1)
     advected = keras.layers.Input(shape=advected_shape)
     # other is the generated prediction of t (frame t+1) or the ground truth of t (frame t+1)
@@ -508,23 +514,23 @@ def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1)):
     combined_imgs = keras.layers.Concatenate(axis=-1)([advected, other])
 
     conv1 = keras.layers.Conv2D(filters=4, kernel_size=4, strides=2, padding='same')(combined_imgs)
-    relu1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
-    dropout1 = keras.layers.Dropout(dropout)(relu1)
+    Bn1   = keras.layers.BatchNormalization()(conv1)
+    relu1 = keras.layers.LeakyReLU(alpha=0.2)(Bn1)
 
-    conv2 = keras.layers.Conv2D(filters=8, kernel_size=4, strides=2, padding='same')(dropout1)
-    relu2 = keras.layers.LeakyReLU(alpha=0.2)(conv2)
-    dropout2 = keras.layers.Dropout(dropout)(relu2)
+    conv2 = keras.layers.Conv2D(filters=8, kernel_size=4, strides=2, padding='same')(relu1)
+    Bn2   = keras.layers.BatchNormalization()(conv2)
+    relu2 = keras.layers.LeakyReLU(alpha=0.2)(Bn2)
 
-    conv3 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(dropout2)
-    relu3 = keras.layers.LeakyReLU(alpha=0.2)(conv3)
-    dropout3 = keras.layers.Dropout(dropout)(relu3)
+    conv3 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(relu2)
+    Bn3   = keras.layers.BatchNormalization()(conv3)
+    relu3 = keras.layers.LeakyReLU(alpha=0.2)(Bn3)
 
-    conv4 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(dropout3)
-    relu4 = keras.layers.LeakyReLU(alpha=0.2)(conv4)
-    dropout4 = keras.layers.Dropout(dropout)(relu4)
+    conv4 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(relu3)
+    Bn4   = keras.layers.BatchNormalization()(conv4)
+    relu4 = keras.layers.LeakyReLU(alpha=0.2)(Bn4)
 
     # Out: 1-dim probability
-    flatten = keras.layers.Flatten()(dropout4)
+    flatten = keras.layers.Flatten()(relu4)
     fcl1 = keras.layers.Dense(1)(flatten)
     sig1 = keras.layers.Activation('sigmoid', name="t_disc_output")(fcl1)
 
