@@ -418,7 +418,7 @@ NETWORKS
 """
 
 
-def unet(input_shape=(64, 64, None)):
+def unet(input_shape=(64, 64, 1)):
     init = keras.layers.Input(shape=input_shape)
     ConvDown1 = keras.layers.Conv2D(filters=8, kernel_size=(2, 2), strides=(1, 1), padding="same")(init)
     Lr1 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown1)
@@ -465,7 +465,7 @@ def unet(input_shape=(64, 64, None)):
     return keras.models.Model(inputs=init, outputs=Conv5)
 
 
-def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, None)):
+def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1)):
     dropout = 0.5
     # condition is the frame t (the original frame) or the sequence of past frames
     condition = keras.layers.Input(shape=condition_shape)
