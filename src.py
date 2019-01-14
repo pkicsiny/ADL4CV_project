@@ -3,8 +3,10 @@ import numpy as np
 import pandas as pd
 import sys
 import re
+from scipy import signal
 import pickle
 import io
+from scipy.signal import savgol_filter
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 import tensorflow as tf
@@ -195,6 +197,7 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
     is the weather measurable: rho, vx, vy
     """
     ch = np.shape(rain)[0]
+    norm_factors = [] #store normalization max values
     if wind is not None:
         # wind timestamps are taken at xx:00:00 but rain is taken at xx:50:00
         # so I take the next index for the wind maps
@@ -239,7 +242,9 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
                 valid = valid_image(image)
         # valid image found, append to final array
         if wind is None:
-            images[i] = np.transpose(image / np.array(image[image < 1e5]).max(),
+            norm_factor = np.array(image[image < 1e5]).max()
+            norm_factors.append(norm_factor)
+            images[i] = np.transpose(image / norm_factor,
                                      (1, 2, 0)) if normalize else np.transpose(image, (1, 2, 0))
         else:
             # get wind data
@@ -250,7 +255,9 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
                 image[k, :, :, 2] = vy[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size].filled(np.nan)
             image[(np.isnan(image)) | (image > 1e5)] = np.nan
             if normalize:
-                image[:, :, :, 0] = image[:, :, :, 0] / image[:, :, :, 0][image[:, :, :, 0] < 1e5].max()
+                norm_factor = image[:, :, :, 0][image[:, :, :, 0] < 1e5].max()
+                image[:, :, :, 0] = image[:, :, :, 0] / norm_factor
+                norm_factors.append(norm_factor)
             # transpose images to have channel as second last dim
             images[i] = np.transpose(image, (1, 2, 0, 3))
 
@@ -280,18 +287,19 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
                     "low_res_test": low_res_test,
                     "train": train,
                     "xval": xval,
-                    "test": test}
+                    "test": test,
+                    "norm factors": norm_factors}
         else:
             update_output(txt)
-            return {"train": train, "xval": xval, "test": test}
+            return {"train": train, "xval": xval, "test": test, "norm factors": norm_factors}
     else:  # no split
         if task == "upsampling":  # downsample
             low_res_data = images[:, ::down_factor, ::down_factor]
             update_output(txt + f"\nShape of downsampled data: {np.shape(low_res_data)}")
-            return {"low_res_data": low_res_data, "images": images}  # data and ground truth
+            return {"low_res_data": low_res_data, "images": images, "norm factors": norm_factors}  # data and ground truth
         else:
             update_output(txt)
-            return {"images": images}
+            return {"images": images, "norm facotrs": norm_factors}
 
 
 def valid_image(image):
@@ -306,7 +314,9 @@ def valid_image(image):
     junk = [len(set(np.array(frame).flatten()[
                         np.array(frame).flatten() < 1e5])) <= 8 for frame in image]
     junk += [len(np.array(frame).flatten()[
-                     np.array(frame).flatten() < 1e5]) < 0.75 * len(np.array(frame).flatten()) for frame in image]
+                     np.array(frame).flatten() < 1e5]) < len(np.array(frame).flatten()) for frame in image] # no nans
+    junk += [len(np.array(frame).flatten()[
+                     np.array(frame).flatten()==0]) > 0.8*len(np.array(frame).flatten()) for frame in image]  # many zeros
     return 0 if any(junk) else 1
 
 """
@@ -338,6 +348,69 @@ def rotate(img, degree):
 """
 UTILS
 """
+
+def optical_flow(prev, curr, window_size=4, tau=1e-2):
+    """
+    Calculates the dense optical flow x and y components between prev and curr.
+    Requires import scipy signal and numpy.
+    :param prev: numpy array of shape (n, h, w, 1)
+    :param curr: numpy array of shape (n, h, w, 1)
+    :param window_size: int, kernel window size
+    :param tau: float, threshold value for eigenvalues
+    :return: 2 numpy arrays of shape (n, h, w, 1)
+    """
+    print("Calculating optical flow with Lucas Kanade method.")
+    kernel_x = np.array([[-1., 1.], [-1., 1.]])
+    kernel_y = np.array([[-1., -1.], [1., 1.]])
+    kernel_t = np.array([[1., 1.], [1., 1.]])#*.25
+    w = int(window_size/2) # window_size is odd, all the pixels with offset in between [-w, w] are inside the window
+    # Implement Lucas Kanade
+    # for each point, calculate I_x, I_y, I_t
+    mode = 'same'
+    u = np.zeros(prev.shape)
+    v = np.zeros(prev.shape)
+    # within window window_size * window_size
+    for sample in range(prev.shape[0]): # loop over samples
+        fx = signal.convolve2d(prev[sample,:,:,0], kernel_x, boundary='symm', mode=mode)
+        fy = signal.convolve2d(prev[sample,:,:,0], kernel_y, boundary='symm', mode=mode)
+        ft = signal.convolve2d(curr[sample,:,:,0], kernel_t, boundary='symm', mode=mode) + signal.convolve2d(
+                               prev[sample,:,:,0], -kernel_t, boundary='symm', mode=mode)
+        for i in range(w, int(prev[sample,:,:,0].shape[0]-w)):
+            for j in range(w, int(prev[sample,:,:,0].shape[1]-w)):
+                Ix = fx[i-w:i+w+1, j-w:j+w+1].flatten()
+                Iy = fy[i-w:i+w+1, j-w:j+w+1].flatten()
+                It = ft[i-w:i+w+1, j-w:j+w+1].flatten()
+                b = np.reshape(It, (It.shape[0],1))
+                A = np.vstack((Ix, Iy)).T
+                # if threshold tau is larger than the smallest eigenvalue of A'A:
+                if np.min(abs(np.linalg.eigvals(np.matmul(A.T, A)))) >= tau:
+                    nu = np.matmul(np.linalg.pinv(A), b) # get velocity here
+                    u[sample,i,j,0]=nu[0]
+                    v[sample,i,j,0]=nu[1]
+    return u, v
+
+
+def advect(image): # (64,64,3)
+    """
+    Applies the physical advection (material derivative) on a density (rain) frame.
+    See: https://en.wikipedia.org/wiki/Advection
+    in short: r(t+1)=r(t)-vx(t)*drdx(t)-vy(t)*drdy(t)
+    :param image: one image with 3 channels: the advected material (rain desity) and the flow field (wind) x and y components.
+    """
+    #pad image
+    padded = np.pad(image,(0,1),'edge')[:,:,:-1]
+    #set nans to 0
+    padded[np.isnan(padded)] = 0
+    #create array for advected frame
+    advected = np.empty_like(image)
+    #advect (nans will be treated as 0s)
+    advected[:,:,0] = image[:,:,0] - image[:,:,1]*(padded[1:,:,0] - padded[:-1,:,0])[:,:-1] - image[:,:,2]*(padded[:,1:,0] - padded[:,:-1,0])[:-1]
+    #renormalize (saturate)
+    advected[:,:,0][advected[:,:,0] < 0] = 0
+    advected[:,:,0][advected[:,:,0] > 1] = 1
+    #other channels stay the same
+    advected[:,:,1:] = image[:,:,1:]
+    return advected[:,:,0:1]  # (64, 64, 1) only rain
 
 
 def freeze_header(df, num_rows=30, num_columns=10, step_rows=1,
@@ -420,59 +493,78 @@ NETWORKS
 # "BN denotes batch normalization, which is not used in the
 # last layer of G, the first layer of Dt and the first layer of Ds [Radford et al. 2016]." from tempoGAN paper
 
-def unet(input_shape=(64, 64, 1)):
+def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False):
     init = keras.layers.Input(shape=input_shape)
     ConvDown1 = keras.layers.Conv2D(filters=8, kernel_size=(2, 2), strides=(1, 1), padding="same")(init)
-    Bn1 = keras.layers.BatchNormalization()(ConvDown1)
-    Lr1 = keras.layers.LeakyReLU(alpha=0.1)(Bn1)
+    if batchnorm:
+        ConvDown1 = keras.layers.BatchNormalization()(ConvDown1)
+    Lr1 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown1)
+    d1rop1 = keras.layers.Dropout(dropout)(Lr1)
     # 64
-    ConvDown2 = keras.layers.Conv2D(filters=16, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr1)
-    Bn2 = keras.layers.BatchNormalization()(ConvDown2)
-    Lr2 = keras.layers.LeakyReLU(alpha=0.1)(Bn2)
+    ConvDown2 = keras.layers.Conv2D(filters=16, kernel_size=(2, 2), strides=(2, 2), padding="same")(d1rop1)
+    if batchnorm:
+        ConvDown2 = keras.layers.BatchNormalization()(ConvDown2)
+    Lr2 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown2)
+    d1rop2 = keras.layers.Dropout(dropout)(Lr2)
     # 32
-    ConvDown3 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr2)
-    Bn3 = keras.layers.BatchNormalization()(ConvDown3)
-    Lr3 = keras.layers.LeakyReLU(alpha=0.1)(Bn3)
+    ConvDown3 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(d1rop2)
+    if batchnorm:
+        ConvDown3 = keras.layers.BatchNormalization()(ConvDown3)
+    Lr3 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown3)
+    d1rop3 = keras.layers.Dropout(dropout)(Lr3)
     # 16
-    ConvDown4 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr3)
-    Bn4 = keras.layers.BatchNormalization()(ConvDown4)
-    Lr4 = keras.layers.LeakyReLU(alpha=0.1)(Bn4)
+    ConvDown4 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(d1rop3)
+    if batchnorm:
+        ConvDown4 = keras.layers.BatchNormalization()(ConvDown4)
+    Lr4 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown4)
+    d1rop4 = keras.layers.Dropout(dropout)(Lr4)
     # 8
-    ConvDown5 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr4)
-    Bn5 = keras.layers.BatchNormalization()(ConvDown5)
-    Lr5 = keras.layers.LeakyReLU(alpha=0.1)(Bn5)
+    ConvDown5 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(d1rop4)
+    if batchnorm:
+        ConvDown5 = keras.layers.BatchNormalization()(ConvDown5)
+    Lr5 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown5)
+    d1rop5 = keras.layers.Dropout(dropout)(Lr5)
     # 4
 
     # 8
-    UpSamp1 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr5)
+    UpSamp1 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(d1rop5)
     merge1 = keras.layers.concatenate([ConvDown4, UpSamp1], axis=-1)
     Conv1 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge1)
-    Bn6 = keras.layers.BatchNormalization()(Conv1)
-    Lr6 = keras.layers.LeakyReLU(alpha=0.1)(Bn6)
+    if batchnorm:
+        Conv1 = keras.layers.BatchNormalization()(Conv1)
+    Lr6 = keras.layers.LeakyReLU(alpha=0.1)(Conv1)
+    d1rop6 = keras.layers.Dropout(dropout)(Lr6)
     # 16
-    UpSamp2 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr6)
+    UpSamp2 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(d1rop6)
     merge2 = keras.layers.concatenate([ConvDown3, UpSamp2], axis=-1)
     Conv2 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge2)
-    Bn7 = keras.layers.BatchNormalization()(Conv2)
-    Lr7 = keras.layers.LeakyReLU(alpha=0.1)(Bn7)
+    if batchnorm:
+        Conv2 = keras.layers.BatchNormalization()(Conv2)
+    Lr7 = keras.layers.LeakyReLU(alpha=0.1)(Conv2)
+    d1rop7 = keras.layers.Dropout(dropout)(Lr7)
     # 32
-    UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr7)
-    Conv3 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(UpSamp3)
-    Bn8 = keras.layers.BatchNormalization()(Conv3)
-    Lr8 = keras.layers.LeakyReLU(alpha=0.1)(Bn8)
+    UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(d1rop7)
+    merge3 = keras.layers.concatenate([ConvDown2, UpSamp3], axis=-1)
+    Conv3 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge3)
+    if batchnorm:
+        Conv3 = keras.layers.BatchNormalization()(Conv3)
+    Lr8 = keras.layers.LeakyReLU(alpha=0.1)(Conv3)
+    d1rop8 = keras.layers.Dropout(dropout)(Lr8)
     # 64
-    UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr8)
+    UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(d1rop8)
     Conv4 = keras.layers.Conv2D(filters=8, kernel_size=(4, 4), strides=(1, 1), padding="same")(UpSamp4)
-    Bn9 = keras.layers.BatchNormalization()(Conv4)
-    Lr9 = keras.layers.LeakyReLU(alpha=0.1)(Bn9)
+    if batchnorm:
+        Conv4 = keras.layers.BatchNormalization()(Conv4)
+    Lr9 = keras.layers.LeakyReLU(alpha=0.1)(Conv4)
+    d1rop9 = keras.layers.Dropout(dropout)(Lr9)
 
     Conv5 = keras.layers.Conv2D(filters=1, kernel_size=(4, 4), strides=(1, 1),
-                                padding="same", activation='tanh')(Lr9)
+                                padding="same", activation='tanh')(d1rop9)
 
     return keras.models.Model(inputs=init, outputs=Conv5)
 
 
-def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1)):
+def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), dropout=0.3):
     # condition is the frame t (the original frame) or the sequence of past frames
     condition = keras.layers.Input(shape=condition_shape)
     # other is the generated prediction of frame t+1 or the ground truth frame t+1
@@ -483,21 +575,25 @@ def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1)):
     conv1 = keras.layers.Conv2D(filters=4, kernel_size=4, strides=2, padding='same')(combined_imgs)
     Bn1   = keras.layers.BatchNormalization()(conv1)
     relu1 = keras.layers.LeakyReLU(alpha=0.2)(Bn1)
+    d1rop1 = keras.layers.Dropout(dropout)(relu1)
 
-    conv2 = keras.layers.Conv2D(filters=8, kernel_size=4, strides=2, padding='same')(relu1)
+    conv2 = keras.layers.Conv2D(filters=8, kernel_size=4, strides=2, padding='same')(d1rop1)
     Bn2   = keras.layers.BatchNormalization()(conv2)
     relu2 = keras.layers.LeakyReLU(alpha=0.2)(Bn2)
+    d1rop2 = keras.layers.Dropout(dropout)(relu2)
 
-    conv3 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(relu2)
+    conv3 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(d1rop2)
     Bn3   = keras.layers.BatchNormalization()(conv3)
     relu3 = keras.layers.LeakyReLU(alpha=0.2)(Bn3)
+    d1rop3 = keras.layers.Dropout(dropout)(relu3)
 
-    conv4 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(relu3)
+    conv4 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(d1rop3)
     Bn4   = keras.layers.BatchNormalization()(conv4)
     relu4 = keras.layers.LeakyReLU(alpha=0.2)(Bn4)
+    d1rop4 = keras.layers.Dropout(dropout)(relu4)
 
     # Out: 1-dim probability
-    flatten = keras.layers.Flatten()(relu4)
+    flatten = keras.layers.Flatten()(d1rop4)
     fcl1 = keras.layers.Dense(1)(flatten)
     sig1 = keras.layers.Activation('sigmoid', name="s_disc_output")(fcl1)
 
@@ -591,7 +687,7 @@ def gradient_diff(yTrue, yPred):
         pred = K.pow(K.flatten(K.abs(K.abs(yTrue[:, :, 1:, :] - yTrue[:, :, :-1, :]) -
                                K.abs(yPred[:, :, 1:, :] - yPred[:, :, :-1, :]))), alpha)
 
-    elif len(yTrue.shape) == len(yPred.shape) == 5:
+    else:
         true = K.pow(K.flatten(K.abs(K.abs(yTrue[:, :, 1:, :, :] - yTrue[:, :, :-1, :, :]) -
                                K.abs(yPred[:, :, 1:, :, :] - yPred[:, :, :-1, :, :]))), alpha)
         pred = K.pow(K.flatten(K.abs(K.abs(yTrue[:, :, :, 1:, :] - yTrue[:, :, :, :-1, :]) -
@@ -769,7 +865,7 @@ def result_plotter(indices, datasets, save=True):
     """
     title = ['Frame t', 'Frame t+1', 'Prediction t+1', 'Pixelwise difference']
     for i in indices:
-        fig, axes = plt.subplots(nrows=1, ncols=4, num=None, figsize=(16, 16), dpi=80, facecolor='w', edgecolor='k')
+        fig, axes = plt.subplots(nrows=1, ncols=len(datasets), num=None, figsize=(16, 16), dpi=80, facecolor='w', edgecolor='k')
         for j, ax in enumerate(axes.flat):
             im = ax.imshow(datasets[j][int(i)], vmin=0,
                            vmax=max([np.max(dset[int(i)]) for dset in datasets[:2]]) if int(j) < 3 else None)
@@ -779,7 +875,7 @@ def result_plotter(indices, datasets, save=True):
             ax.axis('off')
         if save:
             plt.savefig(f"Plots/Sample_{i}.png")
-    plt.show()
+    #plt.show()
 
 
 def colorbar(mappable):
@@ -789,3 +885,8 @@ def colorbar(mappable):
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="5%", pad=0.05)
     return fig.colorbar(mappable, cax=cax)
+
+
+from scipy.signal import savgol_filter
+def smooth(curve):
+    return savgol_filter(curve, 51, 3)
