@@ -331,11 +331,11 @@ def augment_data(data):
         data_sample,
         rotate(data_sample, "90"),
         rotate(data_sample, "180"),
-        rotate(data_sample, "270"),
-        np.flip(data_sample, axis=1),
-        np.flip(rotate(data_sample, "90"), axis=1),
-        np.flip(rotate(data_sample, "180"), axis=1),
-        np.flip(rotate(data_sample, "270"), axis=1)]) for data_sample in data], ((data.shape[0]*8,)+data.shape[1:]))
+        rotate(data_sample, "270")]) for data_sample in data], ((data.shape[0]*4,)+data.shape[1:]))
+        #np.flip(data_sample, axis=1),
+        #np.flip(rotate(data_sample, "90"), axis=1),
+        #np.flip(rotate(data_sample, "180"), axis=1),
+        #np.flip(rotate(data_sample, "270"), axis=1)]) for data_sample in data], ((data.shape[0]*8,)+data.shape[1:]))
 
 def rotate(img, degree):
 
@@ -351,7 +351,7 @@ def rotate(img, degree):
 UTILS
 """
 
-def optical_flow(prev, curr, window_size=4, tau=1e-2):
+def optical_flow(prev, curr, window_size=4, tau=1e-2, init=0):
     """
     Calculates the dense optical flow x and y components between prev and curr.
     Requires import scipy signal and numpy.
@@ -372,7 +372,8 @@ def optical_flow(prev, curr, window_size=4, tau=1e-2):
     v = np.zeros(prev.shape)
     # within window window_size * window_size
     for sample in range(prev.shape[0]): # loop over samples
-        update_output(f"[{sample}/{prev.shape[0]}]")
+        if init == 1:
+            update_output(f"[{sample+1}/{prev.shape[0]}]")
         fx = signal.convolve2d(prev[sample,:,:,0], kernel_x, boundary='symm', mode=mode)
         fy = signal.convolve2d(prev[sample,:,:,0], kernel_y, boundary='symm', mode=mode)
         ft = signal.convolve2d(curr[sample,:,:,0], kernel_t, boundary='symm', mode=mode) + signal.convolve2d(
@@ -389,6 +390,9 @@ def optical_flow(prev, curr, window_size=4, tau=1e-2):
                     nu = np.matmul(np.linalg.pinv(A), b) # get velocity here
                     u[sample,i,j,0]=nu[0]
                     v[sample,i,j,0]=nu[1]
+   # u = np.array([2*((uu - np.min(uu)) / (np.max(uu) - np.min(uu))) - 1 for uu in u])
+   # v = np.array([2*((vv - np.min(vv)) / (np.max(vv) - np.min(vv))) - 1 for vv in v])
+    print(f"Optical flow map shapes: vx: {u.shape}, vy: {v.shape}")
     return u, v
 
 
@@ -496,84 +500,94 @@ NETWORKS
 # last layer of G, the first layer of Dt and the first layer of Ds [Radford et al. 2016]." from tempoGAN paper
 
 def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False):
+    relu_coeff = 0
     init = keras.layers.Input(shape=input_shape)
-    ConvDown1 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(1, 1), padding="same")(init)
+
+    ConvDown1 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(2, 2), padding="same")(init) #32
     if batchnorm:
         ConvDown1 = keras.layers.BatchNormalization()(ConvDown1)
-    Lr1 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown1)
+    Lr1 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown1)
     if (dropout > 0) and (dropout <= 1):
         Lr1 = keras.layers.Dropout(dropout)(Lr1)
-    # 64
-    ConvDown2 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr1)
+
+    ConvDown2 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr1) #16
     if batchnorm:
         ConvDown2 = keras.layers.BatchNormalization()(ConvDown2)
-    Lr2 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown2)
+    Lr2 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown2)
     if (dropout > 0) and (dropout <= 1):
         Lr2 = keras.layers.Dropout(dropout)(Lr2)
-    # 32
-    ConvDown3 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr2)
+
+    ConvDown3 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr2) # 8
     if batchnorm:
         ConvDown3 = keras.layers.BatchNormalization()(ConvDown3)
-    Lr3 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown3)
+    Lr3 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown3)
     if (dropout > 0) and (dropout <= 1):
         Lr3 = keras.layers.Dropout(dropout)(Lr3)
-    # 16
-    ConvDown4 = keras.layers.Conv2D(filters=32, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr3)
+
+    ConvDown4 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr3) # 4
     if batchnorm:
         ConvDown4 = keras.layers.BatchNormalization()(ConvDown4)
-    Lr4 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown4)
+    Lr4 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown4)
     if (dropout > 0) and (dropout <= 1):
         Lr4 = keras.layers.Dropout(dropout)(Lr4)
-    # 8
-    ConvDown5 = keras.layers.Conv2D(filters=64, kernel_size=(2, 2), strides=(2, 2), padding="same")(Lr4)
+
+    ConvDown5 = keras.layers.Conv2D(filters=64, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr4) #2
     if batchnorm:
         ConvDown5 = keras.layers.BatchNormalization()(ConvDown5)
-    Lr5 = keras.layers.LeakyReLU(alpha=0.1)(ConvDown5)
+    Lr5 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown5)
     if (dropout > 0) and (dropout <= 1):
         Lr5 = keras.layers.Dropout(dropout)(Lr5)
-    # 4
 
-    # 8
-    UpSamp1 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr5)
-    merge1 = keras.layers.concatenate([ConvDown4, UpSamp1], axis=-1)
-    Conv1 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge1)
+
+    #UpSamp1 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr5) # 4
+    ConvUp4 = keras.layers.Conv2DTranspose(filters=32, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr5)
     if batchnorm:
-        Conv1 = keras.layers.BatchNormalization()(Conv1)
-    Lr6 = keras.layers.LeakyReLU(alpha=0.1)(Conv1)
+        ConvUp4 = keras.layers.BatchNormalization()(ConvUp4)
+    Lr6 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp4)
     if (dropout > 0) and (dropout <= 1):
         Lr6 = keras.layers.Dropout(dropout)(Lr6)
-    # 16
-    UpSamp2 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr6)
-    merge2 = keras.layers.concatenate([ConvDown3, UpSamp2], axis=-1)
-    Conv2 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge2)
+    merge1 = keras.layers.concatenate([ConvDown4, Lr6], axis=-1)
+
+   # UpSamp2 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr6) #8
+    ConvUp3 = keras.layers.Conv2DTranspose(filters=32, kernel_size=(4, 4), strides=(2, 2), padding="same")(merge1)
+    #Conv2 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge2)
     if batchnorm:
-        Conv2 = keras.layers.BatchNormalization()(Conv2)
-    Lr7 = keras.layers.LeakyReLU(alpha=0.1)(Conv2)
+        ConvUp3 = keras.layers.BatchNormalization()(ConvUp3)
+    Lr7 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp3)
     if (dropout > 0) and (dropout <= 1):
         Lr7 = keras.layers.Dropout(dropout)(Lr7)
-    # 32
-    UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr7)
-    merge3 = keras.layers.concatenate([ConvDown2, UpSamp3], axis=-1)
-    Conv3 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge3)
+    merge2 = keras.layers.concatenate([ConvDown3, Lr7], axis=-1)
+
+    #UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr7) #16
+    ConvUp2 = keras.layers.Conv2DTranspose(filters=16, kernel_size=(4, 4), strides=(2, 2), padding="same")(merge2)
+    #Conv3 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge3)
     if batchnorm:
-        Conv3 = keras.layers.BatchNormalization()(Conv3)
-    Lr8 = keras.layers.LeakyReLU(alpha=0.1)(Conv3)
+        ConvUp2 = keras.layers.BatchNormalization()(ConvUp2)
+    Lr8 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp2)
     if (dropout > 0) and (dropout <= 1):
         Lr8 = keras.layers.Dropout(dropout)(Lr8)
-    # 64
-    UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr8)
-    merge4 = keras.layers.concatenate([ConvDown1, UpSamp4], axis=-1)
-    Conv4 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge4)
+    merge3 = keras.layers.concatenate([ConvDown2, Lr8], axis=-1)
+
+    #UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr8) #32
+    #Conv4 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge4)
+    ConvUp1 = keras.layers.Conv2DTranspose(filters=16, kernel_size=(4, 4), strides=(2, 2), padding="same")(merge3)
     if batchnorm:
-        Conv4 = keras.layers.BatchNormalization()(Conv4)
-    Lr9 = keras.layers.LeakyReLU(alpha=0.1)(Conv4)
+        ConvUp1 = keras.layers.BatchNormalization()(ConvUp1)
+    Lr9 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp1)
     if (dropout > 0) and (dropout <= 1):
         Lr9 = keras.layers.Dropout(dropout)(Lr9)
+    merge4 = keras.layers.concatenate([ConvDown1, Lr9], axis=-1)
 
-    Conv5 = keras.layers.Conv2D(filters=1, kernel_size=(4, 4), strides=(1, 1),
-                                padding="same", activation='tanh')(Lr9)
 
-    return keras.models.Model(inputs=init, outputs=Conv5)
+    #UpSamp5 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr9) #64
+    #Conv5 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge5)
+    ConvUp0 = keras.layers.Conv2DTranspose(filters=1, kernel_size=(4, 4), strides=(2, 2),
+                                           padding="same", activation='tanh')(merge4)
+
+    #Conv6 = keras.layers.Conv2D(filters=1, kernel_size=(4, 4), strides=(1, 1), #64
+    #                            padding="same", activation='tanh')(merge5)
+
+    return keras.models.Model(inputs=init, outputs=ConvUp0)
 
 
 def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), dropout=0, batchnorm=False):
@@ -632,28 +646,28 @@ def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1), 
 
     conv1 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(combined_imgs)
     if batchnorm:
-        conv1   = keras.layers.BatchNormalization()(conv1)
+        conv1 = keras.layers.BatchNormalization()(conv1)
     relu1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
     if (dropout > 0) and (dropout <= 1):
         relu1 = keras.layers.Dropout(dropout)(relu1)
 
     conv2 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(relu1)
     if batchnorm:
-        conv2   = keras.layers.BatchNormalization()(conv2)
+        conv2 = keras.layers.BatchNormalization()(conv2)
     relu2 = keras.layers.LeakyReLU(alpha=0.2)(conv2)
     if (dropout > 0) and (dropout <= 1):
         relu2 = keras.layers.Dropout(dropout)(relu2)
 
     conv3 = keras.layers.Conv2D(filters=64, kernel_size=4, strides=2, padding='same')(relu2)
     if batchnorm:
-        conv3   = keras.layers.BatchNormalization()(conv3)
+        conv3 = keras.layers.BatchNormalization()(conv3)
     relu3 = keras.layers.LeakyReLU(alpha=0.2)(conv3)
     if (dropout > 0) and (dropout <= 1):
         relu3 = keras.layers.Dropout(dropout)(relu3)
 
     conv4 = keras.layers.Conv2D(filters=128, kernel_size=4, strides=2, padding='same')(relu3)
     if batchnorm:
-        conv4   = keras.layers.BatchNormalization()(conv4)
+        conv4 = keras.layers.BatchNormalization()(conv4)
     relu4 = keras.layers.LeakyReLU(alpha=0.2)(conv4)
     if (dropout > 0) and (dropout <= 1):
         relu4 = keras.layers.Dropout(dropout)(relu4)

@@ -1,11 +1,55 @@
+import src
+import keras.backend as K
+import os
+import numpy as np
+import sys
+import re
+import math
+import io
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+from  matplotlib.animation import FuncAnimation
+from matplotlib import colors
+from netCDF4 import Dataset
+from IPython.display import clear_output
+#data folder
+sys.path.insert(0, 'C:/Users/pkicsiny/Desktop/TUM/3/ADL4CV/data')
+#forces CPU usage
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"] = "0" #"" or "-1" for CPU, "0" for GPU
+import tensorflow as tf
+from tensorflow import keras
+from keras.models import load_model
+from tensorflow.python.client import device_lib
+print(device_lib.list_local_devices())
+
+
 # modified from source: https://github.com/eriklindernoren/Keras-GAN/blob/master/gan/gan.py
 class GAN():
-    def __init__(self, dual=False, past=1, loss_function="l1",
-                 augment=False, g_dropout=0.5, d_dropout=0.5, batchnorm=True, obj=10, bce_s=0, bce_t=0):
+    def __init__(self,
+                 dual=False,
+                 past=1,
+                 loss_function="l1",
+                 augment=False,
+                 g_dropout=0.5,
+                 d_dropout=0.5,
+                 g_batchnorm=True,
+                 d_batchnorm=True,
+                 obj=1,
+                 bce_s=1,
+                 bce_t=1,
+                 dynamic_loss=False,
+                 noisy_labels=False,
+                 loss_constraint=0):
+
         self.dual = dual  # set this to True to train temporal discriminator
         self.size = 64
+        self.g_batchnorm = g_batchnorm  # in G
+        self.d_batchnorm = d_batchnorm  # in D
         self.g_dropout = g_dropout
         self.d_dropout = d_dropout
+        self.noisy_labels = noisy_labels
         self.past_input = past  # set this to change sequence length
         self.input_shape = (self.size, self.size, self.past_input)  # 64, 64, t
         self.log = {"g_loss": [],
@@ -21,15 +65,17 @@ class GAN():
         self.xval_data = None
         self.test_data = None
         self.augment = augment
-        self.batchnorm = batchnorm
         # Loss params
         self.loss_weights = [obj, bce_s]
+        self.dynamic_loss = dynamic_loss
+        self.objective_loss_constraint = loss_constraint
+        # self.tenpercent_obj = obj*0.1
         self.losses = [src.custom_loss(loss=loss_function), keras.losses.binary_crossentropy]
         self.d_metric = [keras.metrics.binary_accuracy]
-
-        self.d_optimizer = keras.optimizers.SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+        # Optimizers
+        self.d_optimizer = keras.optimizers.SGD(lr=0.01)
         # 0.01
-        self.g_optimizer = keras.optimizers.Adam(0.0002, 0.5, decay=1e-6)
+        self.g_optimizer = keras.optimizers.Adam(0.0002, 0.5)  # , decay=1e-6)
         # lr=0.0002, 0.5
 
 
@@ -58,7 +104,7 @@ class GAN():
                                          optimizer=self.d_optimizer,
                                          metrics=self.d_metric)
             # Temporal disc. takes in advected frame A(G(x_previous)) and G(x)
-            adv = keras.layers.Input(shape=self.input_shape)
+            adv = keras.layers.Input(shape=(64, 64, 1))
             self.inputs.append(adv)
             score_t = self.t_discriminator([adv, generated])
             self.outputs.append(score_t)
@@ -74,64 +120,57 @@ class GAN():
     def build_generator(self, network="U-net"):
         generator = keras.Sequential()
         if network in ["Unet", "U-net", "unet", "u-net"]:
-            return src.unet(self.input_shape, dropout=self.g_dropout, batchnorm=self.batchnorm)  # 64, 64, t
+            return src.unet(self.input_shape, dropout=self.g_dropout, batchnorm=self.g_batchnorm)  # 64, 64, t
 
     def build_discriminator(self, which="s"):
         if which == "s":
-            return src.spatial_discriminator(condition_shape=self.input_shape, dropout=self.d_dropout)
+            return src.spatial_discriminator(condition_shape=self.input_shape, dropout=self.d_dropout,
+                                             batchnorm=self.d_batchnorm)
         elif which == "t":
-            return src.temporal_discriminator()
-            # ---------------------
+            return src.temporal_discriminator(dropout=self.d_dropout, batchnorm=self.d_batchnorm)
+
+
+            # ----------------------------------------------------
             #  Train
-            # ---------------------
+            # ----------------------------------------------------
 
-    def train(self, epochs, d_epochs=1, dataset="5min", batch_size=64, overfit=False):
-        assert isinstance(d_epochs, int) > 0 and isinstance(epochs,
-                                                            int) > 0, "Number of epochs must be a positive integer."
-
+    def train(self, epochs, d_epochs=1, batch_size=64, overfit=False):
         # Load the dataset
         if self.dual:
-            if dataset not in ["gan", "GAN", "tempogan", "tempoGAN"]:
-                dataset = "gan"
-                print("tempoGAN training: Changed dataset to GAN data.")
             self.past_input += 1
             print(
             "tempoGAN training: Increased input sequence length by one. First frame is only auxiliary for advection.")
         else:
-            if dataset in ["gan", "GAN", "tempogan", "tempoGAN"]:
-                dataset = "5min"
-                print("Normal GAN training: Changed dataset to 5min data.")
+            print("Normal GAN training: Changed dataset to 5min data.")
 
-        if overfit:
-            batch_size = 1
-            print("Overfit test: batch size set to 1.")
+        print(f"Loading dataset.")
+        self.train_data, self.xval_data, self.test_data = src.load_datasets(self.past_input)
 
-        print(f"Loading {dataset} dataset.")
-        self.train_data, self.xval_data, self.test_data = src.load_datasets(dataset, self.past_input)
-        self.train_data[np.isnan(self.train_data)] = 0
-        self.xval_data[np.isnan(self.xval_data)] = 0
-        self.test_data[np.isnan(self.test_data)] = 0
         # split the dataset to inputs and ground truths
         gan_train, gan_truth, gan_val, gan_val_truth, gan_test, gan_test_truth = src.split_datasets(
-            self.train_data, self.xval_data, self.test_data, past_frames=self.past_input, augment=self.augment)
+            self.train_data[:300], self.xval_data, self.test_data, past_frames=self.past_input, augment=self.augment)
+
+        vx, vy = src.optical_flow(gan_train[:, :, :, -2:-1], gan_train[:, :, :, -1:], window_size=4, tau=1e-2,
+                                  init=1)  # (n,:,:,1)
 
         if overfit:
             batch_size = 1
             gan_train = gan_train[0:1]
             gan_truth = gan_truth[0:1]
-            print("Overfit test: batch size set to 1.")
+            print("Overfit test: use only 1 sample.")
 
         # Adversarial ground truths
-        real = np.ones((batch_size, 1))  # *0.9
+        real = np.ones((batch_size, 1))
         fake = np.zeros((batch_size, 1))
+        print(f"Adversarial labels shape: {real.shape}")
         # Generator ground truths
         g_real = np.ones((batch_size, 1))
-        print(f"Initial loss weights: {self.loss_weights}")
+        # print(f"Initial loss weights: {self.loss_weights}")
         for epoch in range(epochs):
 
             # update loss weights
-            if epoch % (epochs / 10) == 0 and epoch > 0 and 3 * self.loss_weights[0] > self.loss_weights[1]:
-                self.update_loss_weights()
+            if self.dynamic_loss and epoch > 0 and self.loss_weights[0] > 0.3:
+                self.update_loss_weights(epoch)
             # ---------------------
             #  Train Discriminators
             # ---------------------
@@ -143,19 +182,27 @@ class GAN():
             for ks in range(d_epochs):
                 # all 4D
                 real_imgs, training_batch, generated_imgs, _, _ = self.create_training_batch(gan_train, gan_truth,
-                                                                                             batch_size)
+                                                                                             batch_size, "s")
+                # print(f"Input shape: {training_batch.shape}\nGround truth shape: {real_imgs.shape} ")
                 # mix 5% of labels
-                d_real, d_fake = self.noisy_d_labels(real, fake)
+                if self.noisy_labels:
+                    d_real, d_fake = self.noisy_d_labels(real, fake)
+                    # print("Switching 5% of labels for spatial discriminator.")
+                else:
+                    d_real = real
+                    d_fake = fake
+
                 ds_loss_real = self.s_discriminator.train_on_batch([training_batch, real_imgs], d_real)
                 ds_loss_fake = self.s_discriminator.train_on_batch([training_batch, generated_imgs], d_fake)
                 ds_loss = 0.5 * np.add(ds_loss_real, ds_loss_fake)
                 if d_epochs > 1:
                     print(f"    {ks} [Ds loss: {ds_loss[0]}, acc.: {100*ds_loss[1]}]")
-            true_xval = self.s_discriminator.predict([gan_val[:batch_size], gan_val_truth[:batch_size]])
-            fake_xval = self.generator.predict(gan_val[:batch_size])
-            fake_xval = self.s_discriminator.predict([gan_val[:batch_size], fake_xval])
-            d_loss = ds_loss
             self.s_discriminator.trainable = False
+            d_loss = ds_loss
+
+            # true_xval = self.s_discriminator.predict([gan_val[:batch_size], gan_val_truth[:batch_size]])
+            # fake_xval = self.generator.predict(gan_val[:batch_size])
+            # fake_xval = self.s_discriminator.predict([gan_val[:batch_size], fake_xval])
 
             # Train the second discriminator
             # inputs: [advected generated frame t (from frame t-1), generated frame t+1 (from frame t)] &
@@ -165,9 +212,16 @@ class GAN():
                 self.t_discriminator.trainable = True
                 for kt in range(d_epochs):
                     real_imgs, training_batch, generated_imgs, advected_aux_gen, advected_aux_truth = self.create_training_batch(
-                        gan_train, gan_truth, batch_size)
+                        gan_train, gan_truth, batch_size, "t",
+                        vx, vy)
                     # only need rain map from the synthetics
-                    d_real, d_fake = self.noisy_d_labels(real, fake)
+                    if self.noisy_labels:
+                        d_real, d_fake = self.noisy_d_labels(real, fake)
+                        # print("Switching 5% of labels for spatial discriminator.")
+                    else:
+                        d_real = real
+                        d_fake = fake
+
                     dt_loss_real = self.t_discriminator.train_on_batch([advected_aux_truth, real_imgs], d_real)
                     dt_loss_fake = self.t_discriminator.train_on_batch([advected_aux_gen, generated_imgs], d_fake)
                     dt_loss = 0.5 * np.add(dt_loss_real, dt_loss_fake)
@@ -183,27 +237,21 @@ class GAN():
 
             idx = np.random.randint(0, gan_train.shape[0], batch_size)
             if self.dual:
-                training_truth = gan_truth[idx, :, :, :, 0]  # frame t+1, 4D: n, 64, 64, 1
-                assert training_truth.shape[-1] == 1, f"real_imgs: (n, 64, 64, 1), {real_imgs.shape}"
-                aux_batch = gan_train[idx, :, :, :-1,
-                            0]  # from 0 to frame t-1 (not the last frame) 4D: n, 64, 64, past-1
-                assert aux_batch.shape[
-                           -1] == self.past_input - 1, f"aux_batch: (n, 64, 64, {self.past_input-1}), {aux_batch.shape}"
-                training_batch = gan_train[idx, :, :, 1:, 0]  # from frame 1 to end (t>=2), 4D: n, 64, 64, past-1
-                assert training_batch.shape[
-                           -1] == self.past_input - 1, f"training_batch: (n, 64, 64, {self.past_input-1}), {training_batch.shape}"
+                training_truth = gan_truth[idx]  # frame t+1, 4D: n, 64, 64, 1
+                aux_batch = gan_train[idx, :, :, :-1]  # from 0 to frame t-1 (not the last frame) 4D: n, 64, 64, past-1
+                training_batch = gan_train[idx, :, :, 1:]  # from frame 1 to frame t, 4D: n, 64, 64, past-1
                 aux_gen_imgs = self.generator.predict(aux_batch)  # 4D, n, 64, 64, 1: output is frame t
-                assert aux_gen_imgs.shape[-1] == 1, f"aux_gen_imgs: (n, 64, 64, 1), {aux_gen_imgs.shape}"
-                # append velocity field of frame t (last instance of past sequence)
-                aux_gen_imgs = np.concatenate((aux_gen_imgs, gan_train[idx, :, :, -1, 1:]), axis=-1)  # n, 64, 64, 3
-                assert aux_gen_imgs.shape[-1] == 3, f"aux_gen_imgs: (n, 64, 64, 3), {aux_gen_imgs.shape}"
+                # calculate optical flow for frame t-1 -> t
+                # print("Calculating optical flow with Lucas Kanade method.")
+                # vx, vy = src.optical_flow(aux_batch[:,:,:,-1:], training_batch[:,:,:,-1:], window_size=4, tau=1e-2)
+                # concat channels
+                aux_gen_imgs = np.concatenate((aux_gen_imgs, vx[idx], vy[idx]), axis=-1)  # n, 64, 64, 3
                 # advect generated frame t
-                advected_aux_gen = np.array(
-                    [src.advect(sample) for sample in aux_gen_imgs])  # 4D (n, h, w, m) (m: rho, vx, vy)
-                assert advected_aux_gen.shape[-1] == 1, f"advected_aux_gen: (n, 64, 64, 1), {advected_aux_gen.shape}"
+                advected_aux_gen = np.array([src.advect(sample) for sample in aux_gen_imgs])  # 4D (n, 64, 64, 1)
             else:
                 training_batch = gan_train[idx]  # frame t or all past frames, 4D
                 training_truth = gan_truth[idx]  # frame t+1 or all future frames, 4D
+                # print(f"Input shape: {training_batch.shape}\nGround truth shape: {training_truth.shape} ")
 
             # Train the generator (to have the discriminator label samples as real)
             if self.dual:
@@ -216,47 +264,44 @@ class GAN():
             self.log["g_loss"].append(g_loss)
             self.log["d_loss"].append(d_loss[0])
             # self.log["g_metric"].append(g_loss[1])
-            self.log["d_metric"].append(d_loss[1])
-            print(f"\033[1m {epoch}\n[D loss: {d_loss[0]}, acc.: {100*d_loss[1]}, xval fake.: {np.mean(fake_xval)}, " +
-                  f"xval true: {np.mean(true_xval)}]\033[0m\n" +
+            self.log["d_metric"].append([d_loss[1], ds_loss_fake[1], ds_loss_real[1]])
+            print(f"\033[1m {epoch}\n[D loss: {d_loss[0]}, acc.: {100*d_loss[1]}]" +
                   f"\033[1m[G loss: {np.round(g_loss[0], 4)}, obj.: {np.round(g_loss[1], 4)}," +
-                  f"bce.: {np.round(g_loss[2], 4)}]\033[0m")
+                  f"bce.: {np.round(g_loss[2], 4)}]\033[0m")  # , xval fake.: {np.mean(fake_xval)}, "+
+            # f"xval true: {np.mean(true_xval)}]\033[0m\n"+
+
             # self.gradients["g_grads"].append(self.get_gradients(self.combined))
 
 
             # If at save interval => save generated image samples
-            if epoch in [int(x) for x in np.linspace(0, 1, 11) * epochs]:
+            if epoch in [int(x) for x in np.linspace(0, 1, 21) * epochs]:  # 20 figures
                 self.sample_images(epoch, gan_test, gan_test_truth)
 
-    def create_training_batch(self, gan_train, gan_truth, batch_size):
+    def create_training_batch(self, gan_train, gan_truth, batch_size, disc, vx=None, vy=None):
         idx = np.random.randint(0, gan_truth.shape[0], batch_size)
         # Generate a batch of new images
         if self.dual:
             # 0,1->2
-            real_imgs = gan_truth[idx, :, :, :, 0]  # frame t+1, 4D: n, 64, 64, 1
-            assert real_imgs.shape[-1] == 1, f"real_imgs: (n, 64, 64, 1), {real_imgs.shape}"
-            training_batch = gan_train[idx, :, :, 1:, 0]  # from frame 1 to end (t>=2), 4D: n, 64, 64, past-1
-            assert training_batch.shape[
-                       -1] == self.past_input - 1, f"training_batch: (n, 64, 64, {self.past_input-1}), {training_batch.shape}"
-            aux_batch = gan_train[idx, :, :, :-1, 0]  # from 0 to frame t-1 (not the last frame) 4D: n, 64, 64, past-1
-            assert aux_batch.shape[
-                       -1] == self.past_input - 1, f"aux_batch: (n, 64, 64, {self.past_input-1}), {aux_batch.shape}"
+            real_imgs = gan_truth[idx]  # frame t+1, 4D: n, 64, 64, 1
+            training_batch = gan_train[idx, :, :, 1:]  # from frame 1 to end (t>=2), 4D: n, 64, 64, past-1
             generated_imgs = self.generator.predict(training_batch)  # n, h, w, 1, rho (4 dimensional, last drops)
-            assert generated_imgs.shape[-1] == 1, f"generated_imgs: (n, 64, 64, 1), {generated_imgs.shape}"
-            aux_gen_imgs = self.generator.predict(aux_batch)  # 4D, n, 64, 64, 1: output is frame t
-            assert aux_gen_imgs.shape[-1] == 1, f"aux_gen_imgs: (n, 64, 64, 1), {aux_gen_imgs.shape}"
-            # append velocity fields of frame t
-            # this will be advected
-            aux_gen_imgs = np.concatenate((aux_gen_imgs, gan_train[idx, :, :, -1, 1:]), axis=-1)  # n, 64, 64, 3
-            assert aux_gen_imgs.shape[-1] == 3, f"aux_gen_imgs: (n, 64, 64, 3), {aux_gen_imgs.shape}"
-            aux_true_imgs = gan_train[idx, :, :, -1]  # n, 64, 64, 3, frame t with all channels
-            assert aux_true_imgs.shape[-1] == 3, f"aux_true_imgs: (n, 64, 64, 3), {aux_true_imgs.shape}"
-            # advected frame t (frame t+1)
-            advected_aux_gen = np.array(
-                [src.advect(sample) for sample in aux_gen_imgs])  # 4D (n, h, w, m) (m: rho, vx, vy)
-            assert advected_aux_gen.shape[-1] == 1, f"advected_aux_gen: (n, 64, 64, 1), {advected_aux_gen.shape}"
-            advected_aux_truth = np.array([src.advect(sample) for sample in aux_true_imgs])  # 4D
-            assert advected_aux_truth.shape[-1] == 1, f"advected_aux_truth: (n, 64, 64, 1), {advected_aux_truth.shape}"
+            if disc == "t":
+                aux_batch = gan_train[idx, :, :, :-1]  # from 0 to frame t-1 (not the last frame) 4D: n, 64, 64, past-1
+                aux_gen_imgs = self.generator.predict(aux_batch)  # 4D, n, 64, 64, 1: output is frame t
+                # calculate optical flow for frame t-1 -> t
+                # print("Calculating optical flow with Lucas Kanade method.")
+                # vx, vy = src.optical_flow(aux_batch[:,:,:,-1:], training_batch[:,:,:,-1:], window_size=4, tau=1e-2)
+                # concat channels
+                aux_gen_imgs = np.concatenate((aux_gen_imgs, vx[idx], vy[idx]), axis=-1)  # n, 64, 64, 3
+                aux_true_imgs = training_batch[:, :, :, -1:]  # n, 64, 64, 1, frame t with all channels
+                aux_true_imgs = np.concatenate((aux_gen_imgs, vx[idx], vy[idx]), axis=-1)  # n, 64, 64, 3
+                # advected frame t (frame t+1)
+                advected_aux_gen = np.array(
+                    [src.advect(sample) for sample in aux_gen_imgs])  # 4D (n, h, w, m) (m: rho, vx, vy)
+                advected_aux_truth = np.array([src.advect(sample) for sample in aux_true_imgs])  # 4D
+            else:
+                advected_aux_gen = None
+                advected_aux_truth = None
 
         else:  # 4D
             real_imgs = gan_truth[idx]  # 4D
@@ -269,27 +314,28 @@ class GAN():
     def sample_images(self, epoch, gan_test, gan_test_truth):
         n = 5
         if self.dual:
-            test_batch = gan_test[:n, :, :, 1:, 0]  # frame 1 to t (0 is not used bc. its only used in advection), 4D
-            test_truth = gan_test_truth[:n, :, :, :, 0]  # 4th dim is always 1 so ":" is OK
+            test_batch = gan_test[:n, :, :, 1:]  # frame 1 to t (0 is not used bc. its only used in advection), 4D
         else:
             test_batch = gan_test[:n]
-            test_truth = gan_test_truth[:n]
+        test_truth = gan_test_truth[:n]
         gen_imgs = self.generator.predict(test_batch)
-        fig, axs = plt.subplots(n, 3, figsize=(16, 16))
+        plot_range = self.past_input if not self.dual else self.past_input - 1
+        fig, axs = plt.subplots(n, plot_range + 2, figsize=(16, 16))
         for i in range(n):
             vmax = np.max([np.max(test_batch[i]), np.max(test_truth[i])])
-            im = axs[i, 0].imshow(test_batch[i, :, :, 0], vmax=vmax)
-            axs[i, 0].axis('off')
-            src.colorbar(im)
-            axs[i, 0].set_title("Frame t")
-            im2 = axs[i, 1].imshow(test_truth[i, :, :, 0], vmax=vmax)
-            axs[i, 1].axis('off')
+            for j in range(plot_range):
+                im = axs[i, j].imshow(test_batch[i, :, :, j], vmax=vmax)
+                axs[i, j].axis('off')
+                src.colorbar(im)
+                axs[i, j].set_title("Frame t" + str([-self.past_input + 1 + j if j < self.past_input - 1 else ""][0]))
+            im2 = axs[i, -2].imshow(test_truth[i, :, :, 0], vmax=vmax)
+            axs[i, -2].axis('off')
             src.colorbar(im2)
-            axs[i, 1].set_title("Frame t+1")
-            im3 = axs[i, 2].imshow(gen_imgs[i, :, :, 0], vmax=vmax)
-            axs[i, 2].axis('off')
+            axs[i, -2].set_title("Frame t+1")
+            im3 = axs[i, -1].imshow(gen_imgs[i, :, :, 0], vmax=vmax)
+            axs[i, -1].axis('off')
             src.colorbar(im3)
-            axs[i, 2].set_title("Prediction t+1")
+            axs[i, -1].set_title("Prediction t+1")
         fig.savefig("Plots/epoch %d.png" % epoch)
         plt.close()
 
@@ -322,8 +368,26 @@ class GAN():
 
         return optimizer.get_gradients(model.total_loss, weights)
 
-    def update_loss_weights(self):
-        self.loss_weights[0] -= 1
-        self.loss_weights[1:] = [x + 1 for x in self.loss_weights[1:]]
-        print(f"Updated loss weights: {self.loss_weights}")
-        self.combined.compile(loss=self.losses, optimizer=self.g_optimizer, loss_weights=self.loss_weights)
+    def update_loss_weights(self, epoch):
+        if epoch == self.objective_loss_constraint:  # objective function constraint
+            self.loss_weights[0] -= 0.1  # self.tenpercent_obj
+            # self.loss_weights[1:] = [x+self.tenpercent_obj for x in self.loss_weights[1:]]
+            self.objective_loss_constraint += 20
+            print(f"***Updated loss weights: {self.loss_weights}***\nNew threshold: {self.objective_loss_constraint}")
+            self.combined.compile(loss=self.losses, optimizer=self.g_optimizer, loss_weights=self.loss_weights)
+
+#d dropout= 0.25
+gan= GAN(dual=True,
+         augment=True,
+         past=4,
+         g_dropout=0,
+         d_dropout=0.25,
+         g_batchnorm=True,
+         d_batchnorm=True,
+         obj=0.1,
+         bce_s=1,
+         dynamic_loss = False,
+         noisy_labels=True,
+         loss_constraint=0)
+
+gan.train(epochs=100, d_epochs=1, batch_size=64)
