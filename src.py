@@ -948,3 +948,31 @@ def colorbar(mappable):
 from scipy.signal import savgol_filter
 def smooth(curve):
     return savgol_filter(curve, 51, 3)
+
+
+def save_examples(name, test, predictions_dict, past, samples=0):
+    fig, axs = plt.subplots(len(samples)*2,past+4, figsize=(32, 32))
+    fig.subplots_adjust(wspace=0.3, hspace=0.0)
+    for n in range(len(samples)):
+        vmax = np.max(test[n,:,:,:past])
+        vmin = 0
+        for i in range(past):
+            im = axs[2*n,i].imshow(test[samples[n], :,:,i], vmax=vmax,vmin=vmin)
+            axs[2*n,i].axis('off')
+            axs[2*n,i].set_title(f"Past frame {i+1}")
+            colorbar(im)
+            im = axs[2*n+1,i].imshow(test[samples[n], :,:,i], vmax=vmax,vmin=vmin)
+            axs[2*n+1,i].axis('off')
+            axs[2*n+1,i].set_title(f"Past frame {i+1}")
+            colorbar(im)
+        for i in range(past,past+4):
+            im = axs[2*n,i].imshow(predictions_dict[f"{i-past}"][samples[n], :,:,0], vmax=vmax, vmin=vmin)
+            axs[2*n,i].axis('off')
+            axs[2*n,i].set_title(f"Predicted frame {i-past+1}")
+            colorbar(im)
+            im = axs[2*n+1,i].imshow(test[samples[n], :,:,i], vmax=vmax, vmin=vmin)
+            axs[2*n+1,i].axis('off')
+            axs[2*n+1,i].set_title(f"Reference frame {i-past+1}")
+            colorbar(im)
+    fig.savefig(f"Plots/{name}_sequence_prediction.png")
+    plt.close()
