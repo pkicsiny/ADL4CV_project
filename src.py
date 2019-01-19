@@ -395,6 +395,9 @@ def optical_flow(prev, curr, window_size=4, tau=1e-2, init=0):
     print(f"Optical flow map shapes: vx: {u.shape}, vy: {v.shape}")
     return u, v
 
+def normalize_flows(flow_x, flow_y):
+    flow = np.concatenate((flow_x, flow_y), axis=-1)
+    return np.array([2*(flow_pair - np.min(flow_pair)) / (np.max(flow_pair) - np.min(flow_pair)) - 1 for flow_pair in flow])
 
 def advect(image): # (64,64,3)
     """
@@ -499,39 +502,39 @@ NETWORKS
 # "BN denotes batch normalization, which is not used in the
 # last layer of G, the first layer of Dt and the first layer of Ds [Radford et al. 2016]." from tempoGAN paper
 
-def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False):
+def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4):
     relu_coeff = 0
     init = keras.layers.Input(shape=input_shape)
 
-    ConvDown1 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(2, 2), padding="same")(init) #32
+    ConvDown1 = keras.layers.Conv2D(filters=16, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(init) #32
     if batchnorm:
         ConvDown1 = keras.layers.BatchNormalization()(ConvDown1)
     Lr1 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown1)
     if (dropout > 0) and (dropout <= 1):
         Lr1 = keras.layers.Dropout(dropout)(Lr1)
 
-    ConvDown2 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr1) #16
+    ConvDown2 = keras.layers.Conv2D(filters=16, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr1) #16
     if batchnorm:
         ConvDown2 = keras.layers.BatchNormalization()(ConvDown2)
     Lr2 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown2)
     if (dropout > 0) and (dropout <= 1):
         Lr2 = keras.layers.Dropout(dropout)(Lr2)
 
-    ConvDown3 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr2) # 8
+    ConvDown3 = keras.layers.Conv2D(filters=32, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr2) # 8
     if batchnorm:
         ConvDown3 = keras.layers.BatchNormalization()(ConvDown3)
     Lr3 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown3)
     if (dropout > 0) and (dropout <= 1):
         Lr3 = keras.layers.Dropout(dropout)(Lr3)
 
-    ConvDown4 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr3) # 4
+    ConvDown4 = keras.layers.Conv2D(filters=32, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr3) # 4
     if batchnorm:
         ConvDown4 = keras.layers.BatchNormalization()(ConvDown4)
     Lr4 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown4)
     if (dropout > 0) and (dropout <= 1):
         Lr4 = keras.layers.Dropout(dropout)(Lr4)
 
-    ConvDown5 = keras.layers.Conv2D(filters=64, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr4) #2
+    ConvDown5 = keras.layers.Conv2D(filters=64, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr4) #2
     if batchnorm:
         ConvDown5 = keras.layers.BatchNormalization()(ConvDown5)
     Lr5 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown5)
@@ -540,7 +543,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False):
 
 
     #UpSamp1 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr5) # 4
-    ConvUp4 = keras.layers.Conv2DTranspose(filters=32, kernel_size=(4, 4), strides=(2, 2), padding="same")(Lr5)
+    ConvUp4 = keras.layers.Conv2DTranspose(filters=32, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr5)
     if batchnorm:
         ConvUp4 = keras.layers.BatchNormalization()(ConvUp4)
     Lr6 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp4)
@@ -549,7 +552,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False):
     merge1 = keras.layers.concatenate([ConvDown4, Lr6], axis=-1)
 
    # UpSamp2 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr6) #8
-    ConvUp3 = keras.layers.Conv2DTranspose(filters=32, kernel_size=(4, 4), strides=(2, 2), padding="same")(merge1)
+    ConvUp3 = keras.layers.Conv2DTranspose(filters=32, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge1)
     #Conv2 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge2)
     if batchnorm:
         ConvUp3 = keras.layers.BatchNormalization()(ConvUp3)
@@ -559,7 +562,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False):
     merge2 = keras.layers.concatenate([ConvDown3, Lr7], axis=-1)
 
     #UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr7) #16
-    ConvUp2 = keras.layers.Conv2DTranspose(filters=16, kernel_size=(4, 4), strides=(2, 2), padding="same")(merge2)
+    ConvUp2 = keras.layers.Conv2DTranspose(filters=16, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge2)
     #Conv3 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge3)
     if batchnorm:
         ConvUp2 = keras.layers.BatchNormalization()(ConvUp2)
@@ -570,7 +573,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False):
 
     #UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr8) #32
     #Conv4 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge4)
-    ConvUp1 = keras.layers.Conv2DTranspose(filters=16, kernel_size=(4, 4), strides=(2, 2), padding="same")(merge3)
+    ConvUp1 = keras.layers.Conv2DTranspose(filters=16, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge3)
     if batchnorm:
         ConvUp1 = keras.layers.BatchNormalization()(ConvUp1)
     Lr9 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp1)
@@ -581,7 +584,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False):
 
     #UpSamp5 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr9) #64
     #Conv5 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge5)
-    ConvUp0 = keras.layers.Conv2DTranspose(filters=1, kernel_size=(4, 4), strides=(2, 2),
+    ConvUp0 = keras.layers.Conv2DTranspose(filters=1, kernel_size=(kernel_size, kernel_size), strides=(2, 2),
                                            padding="same", activation='tanh')(merge4)
 
     #Conv6 = keras.layers.Conv2D(filters=1, kernel_size=(4, 4), strides=(1, 1), #64
@@ -848,10 +851,10 @@ def calculate_skill_scores(ypredicted, ytruth, x=None, threshold=5):
 
     # correlation
     scores["corr_to_truth"] = [np.sum(
-        ypredicted[i]*ytruth[i]) / np.sqrt(np.sum(ypredicted[i]**2)*np.sum(ytruth[i]**2)) + 1e-9 for i in range(len(ypredicted))]
+        ypredicted[i]*ytruth[i]) / (np.sqrt(np.sum(ypredicted[i]**2)*np.sum(ytruth[i]**2)) + 1e-9) for i in range(len(ypredicted))]
     if x is not None:
         scores["corr_to_input"] = [np.sum(
-            ypredicted[i]*x[i]) / np.sqrt(np.sum(ypredicted[i]**2)*np.sum(x[i]**2)) + 1e-9 for i in range(len(ypredicted))]
+            ypredicted[i]*x[i]) / (np.sqrt(np.sum(ypredicted[i]**2)*np.sum(x[i]**2)) + 1e-9) for i in range(len(ypredicted))]
     return scores
 
 """
