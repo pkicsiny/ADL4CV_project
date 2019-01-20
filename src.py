@@ -60,24 +60,25 @@ def get_data(data_dir, which="h", total_length=None, mask=True):
     return inputs
 
 
-def load_datasets(past_frames=1, future_frames=1):
+def load_datasets(past_frames=1, future_frames=1, prediction=False):
     """
     If the data is already saved in .npz file then use this to load it.
     :param dataset: str, which data: hourly or 5 minutes resolution or data for the dual discriminator gan (hourly too)
     :param past_frames: int, no. of past frames
     :param future_frames: int, no. of predictable frames
+    :param prediction: bool, if True it loads a long sequence for sequence prediction testing
     :return: train, validation, test sets.
     """
-    #if dataset in ["temporal", "tempogan", "tampoGAN", "gan", "GAN"]:
-    #    train = decompress_data(filename=sys.path[0] + "/tempoGAN_train_compressed.npz")[:,:,:,:past_frames+future_frames]
-    #    xval = decompress_data(filename=sys.path[0] + "/tempoGAN_xval_compressed.npz")[:,:,:,:past_frames+future_frames]
-    #    test = decompress_data(filename=sys.path[0] + "/tempoGAN_test_compressed.npz")[:,:,:,:past_frames+future_frames]
-    #if dataset in ["5m", "5min", "5minutes", "5minute"]:
-    train = decompress_data(filename=sys.path[0] + "/5min_train_compressed.npz")[:,:,:,:past_frames+future_frames]
-    xval = decompress_data(filename=sys.path[0] + "/5min_xval_compressed.npz")[:,:,:,:past_frames+future_frames]
-    test = decompress_data(filename=sys.path[0] + "/5min_test_compressed.npz")[:,:,:,:past_frames+future_frames]
-    print(f"Training data: {train.shape}\nValidation data: {xval.shape}\nTest data: {test.shape}")
-    return train, xval, test
+    if not prediction:
+        train = decompress_data(filename=sys.path[0] + "/5min_train_compressed.npz")[:,:,:,:past_frames+future_frames]
+        xval = decompress_data(filename=sys.path[0] + "/5min_xval_compressed.npz")[:,:,:,:past_frames+future_frames]
+        test = decompress_data(filename=sys.path[0] + "/5min_test_compressed.npz")[:,:,:,:past_frames+future_frames]
+        print(f"Training data: {train.shape}\nValidation data: {xval.shape}\nTest data: {test.shape}")
+        return train, xval, test
+    else:
+        long_test = decompress_data(filename=sys.path[0] + "/5min_long_pred_compressed.npz")
+        print(f"Test data: {long_test.shape}")
+        return long_test
 
 
 def reduce_dims(images):
@@ -299,7 +300,7 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
             return {"low_res_data": low_res_data, "images": images, "norm factors": norm_factors}  # data and ground truth
         else:
             update_output(txt)
-            return {"images": images, "norm facotrs": norm_factors}
+            return {"images": images, "norm factors": norm_factors}
 
 
 def valid_image(image):
@@ -350,6 +351,18 @@ def rotate(img, degree):
 """
 UTILS
 """
+
+def noisy_d_labels(real, fake):
+    # idea: https://arxiv.org/pdf/1606.03498.pdf
+    batch_size = len(real)
+    five_percent = int(0.05*batch_size)
+    idx = np.random.randint(0, batch_size, five_percent)
+    d_real = np.ones_like(real)*0.9
+    d_fake = np.zeros_like(fake)
+    d_real[idx] = 0.9
+    d_fake[idx] = 1
+    return d_real, d_fake
+
 
 def optical_flow(prev, curr, window_size=4, tau=1e-2, init=0):
     """
@@ -502,39 +515,39 @@ NETWORKS
 # "BN denotes batch normalization, which is not used in the
 # last layer of G, the first layer of Dt and the first layer of Ds [Radford et al. 2016]." from tempoGAN paper
 
-def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4):
+def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, feature_mult=1):
     relu_coeff = 0
     init = keras.layers.Input(shape=input_shape)
 
-    ConvDown1 = keras.layers.Conv2D(filters=16, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(init) #32
+    ConvDown1 = keras.layers.Conv2D(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(init) #32
     if batchnorm:
         ConvDown1 = keras.layers.BatchNormalization()(ConvDown1)
     Lr1 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown1)
     if (dropout > 0) and (dropout <= 1):
         Lr1 = keras.layers.Dropout(dropout)(Lr1)
 
-    ConvDown2 = keras.layers.Conv2D(filters=16, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr1) #16
+    ConvDown2 = keras.layers.Conv2D(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr1) #16
     if batchnorm:
         ConvDown2 = keras.layers.BatchNormalization()(ConvDown2)
     Lr2 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown2)
     if (dropout > 0) and (dropout <= 1):
         Lr2 = keras.layers.Dropout(dropout)(Lr2)
 
-    ConvDown3 = keras.layers.Conv2D(filters=32, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr2) # 8
+    ConvDown3 = keras.layers.Conv2D(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr2) # 8
     if batchnorm:
         ConvDown3 = keras.layers.BatchNormalization()(ConvDown3)
     Lr3 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown3)
     if (dropout > 0) and (dropout <= 1):
         Lr3 = keras.layers.Dropout(dropout)(Lr3)
 
-    ConvDown4 = keras.layers.Conv2D(filters=32, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr3) # 4
+    ConvDown4 = keras.layers.Conv2D(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr3) # 4
     if batchnorm:
         ConvDown4 = keras.layers.BatchNormalization()(ConvDown4)
     Lr4 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown4)
     if (dropout > 0) and (dropout <= 1):
         Lr4 = keras.layers.Dropout(dropout)(Lr4)
 
-    ConvDown5 = keras.layers.Conv2D(filters=64, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr4) #2
+    ConvDown5 = keras.layers.Conv2D(filters=64*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr4) #2
     if batchnorm:
         ConvDown5 = keras.layers.BatchNormalization()(ConvDown5)
     Lr5 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown5)
@@ -543,7 +556,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4):
 
 
     #UpSamp1 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr5) # 4
-    ConvUp4 = keras.layers.Conv2DTranspose(filters=32, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr5)
+    ConvUp4 = keras.layers.Conv2DTranspose(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr5)
     if batchnorm:
         ConvUp4 = keras.layers.BatchNormalization()(ConvUp4)
     Lr6 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp4)
@@ -552,7 +565,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4):
     merge1 = keras.layers.concatenate([ConvDown4, Lr6], axis=-1)
 
    # UpSamp2 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr6) #8
-    ConvUp3 = keras.layers.Conv2DTranspose(filters=32, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge1)
+    ConvUp3 = keras.layers.Conv2DTranspose(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge1)
     #Conv2 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge2)
     if batchnorm:
         ConvUp3 = keras.layers.BatchNormalization()(ConvUp3)
@@ -562,7 +575,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4):
     merge2 = keras.layers.concatenate([ConvDown3, Lr7], axis=-1)
 
     #UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr7) #16
-    ConvUp2 = keras.layers.Conv2DTranspose(filters=16, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge2)
+    ConvUp2 = keras.layers.Conv2DTranspose(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge2)
     #Conv3 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge3)
     if batchnorm:
         ConvUp2 = keras.layers.BatchNormalization()(ConvUp2)
@@ -573,7 +586,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4):
 
     #UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr8) #32
     #Conv4 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge4)
-    ConvUp1 = keras.layers.Conv2DTranspose(filters=16, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge3)
+    ConvUp1 = keras.layers.Conv2DTranspose(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge3)
     if batchnorm:
         ConvUp1 = keras.layers.BatchNormalization()(ConvUp1)
     Lr9 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp1)
