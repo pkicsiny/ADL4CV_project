@@ -15,6 +15,8 @@ from matplotlib import colors
 import keras.backend as K
 from ipywidgets import interact, IntSlider
 from IPython.display import display
+from sklearn.utils import shuffle
+
 
 """
 DATA IMPORT
@@ -93,7 +95,7 @@ def reduce_dims(images):
     return images
 
 
-def split_datasets(train, xval, test, past_frames=1, future_frames=1, augment=False):
+def split_datasets(train, xval, test, past_frames=1, future_frames=1, augment=False, shuffle_training_data=False):
     """
     Further splits data to input and ground truth datasets. If the data has rain and wind velocity maps, they must be
     in the last channel so everything here compiles for them automatically.
@@ -110,9 +112,9 @@ def split_datasets(train, xval, test, past_frames=1, future_frames=1, augment=Fa
     assert future_frames > 0, "No. of future frames must be a positive integer!"
     if augment:
         print("Data augmentation.")
-    training_data = augment_data(train[:, :, :, :past_frames]) if augment else train[:, :, :, :past_frames]
-    trainig_data_truth = augment_data(train[:, :, :, past_frames:past_frames + future_frames]) if augment else train[
-                                                                    :, :, :, past_frames:past_frames + future_frames]
+    x = augment_data(train, shuffle_training_data) if augment else train
+    training_data = x[:, :, :, :past_frames]
+    trainig_data_truth = x[:, :, :, past_frames:past_frames + future_frames]
     validation_data = xval[:, :, :, :past_frames]
     validation_data_truth = xval[:, :, :, past_frames:past_frames + future_frames]
     test_data = test[:, :, :, :past_frames]
@@ -326,17 +328,18 @@ def valid_image(image):
 DATA AUGMENTATION
 """
 
-def augment_data(data):
+def augment_data(data, shuffle_training_data=False):
     #dimensions are n, h, w, c
-    return np.reshape([np.array([
-        data_sample,
-        rotate(data_sample, "90"),
-        rotate(data_sample, "180"),
-        rotate(data_sample, "270")]) for data_sample in data], ((data.shape[0]*4,)+data.shape[1:]))
-        #np.flip(data_sample, axis=1),
-        #np.flip(rotate(data_sample, "90"), axis=1),
-        #np.flip(rotate(data_sample, "180"), axis=1),
-        #np.flip(rotate(data_sample, "270"), axis=1)]) for data_sample in data], ((data.shape[0]*8,)+data.shape[1:]))
+
+    augmented_data= np.reshape([np.array([
+                        data_sample,
+                    rotate(data_sample, "90"),
+                    rotate(data_sample, "180"),
+                    rotate(data_sample, "270")]) for data_sample in data], ((data.shape[0]*4,)+data.shape[1:]))
+    if shuffle_training_data:
+        return shuffle(augmented_data)
+    else:
+        return augmented_data
 
 def rotate(img, degree):
 
@@ -515,8 +518,7 @@ NETWORKS
 # "BN denotes batch normalization, which is not used in the
 # last layer of G, the first layer of Dt and the first layer of Ds [Radford et al. 2016]." from tempoGAN paper
 
-def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, feature_mult=1):
-    relu_coeff = 0
+def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, feature_mult=1, relu_coeff=0.1):
     init = keras.layers.Input(shape=input_shape)
 
     ConvDown1 = keras.layers.Conv2D(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(init) #32
@@ -606,7 +608,7 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, f
     return keras.models.Model(inputs=init, outputs=ConvUp0)
 
 
-def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), dropout=0, batchnorm=False):
+def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), dropout=0, batchnorm=False, wgan=False):
     # condition is the frame t (the original frame) or the sequence of past frames
     condition = keras.layers.Input(shape=condition_shape)
     # other is the generated prediction of frame t+1 or the ground truth frame t+1
@@ -645,12 +647,13 @@ def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), 
     # Out: 1-dim probability
     flatten = keras.layers.Flatten()(relu4)
     fcl1 = keras.layers.Dense(1)(flatten)
-    sig1 = keras.layers.Activation('sigmoid', name="s_disc_output")(fcl1)
+    if not wgan:
+        fcl1 = keras.layers.Activation('sigmoid', name="s_disc_output")(fcl1)
 
-    return keras.models.Model(inputs=[condition, other], outputs=sig1)
+    return keras.models.Model(inputs=[condition, other], outputs=fcl1)
 
 
-def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1), dropout=0.3, batchnorm=False):
+def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1), dropout=0.3, batchnorm=False, wgan=False):
   #  dropout = 0.5
     # A(G(x_{t-1})) or A(y_{t-1}) (A(frame t)=frame t+1)
     advected = keras.layers.Input(shape=advected_shape)
@@ -691,14 +694,26 @@ def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1), 
     # Out: 1-dim probability
     flatten = keras.layers.Flatten()(relu4)
     fcl1 = keras.layers.Dense(1)(flatten)
-    sig1 = keras.layers.Activation('sigmoid', name="t_disc_output")(fcl1)
+    if not wgan:
+        fcl1 = keras.layers.Activation('sigmoid', name="t_disc_output")(fcl1)
 
-    return keras.models.Model(inputs=[advected, other], outputs=sig1)
+    return keras.models.Model(inputs=[advected, other], outputs=fcl1)
 
 
 """
 LOSS FUNCTIONS
 """
+
+def wasserstein_loss(y_true, y_pred):
+    """Calculates the Wasserstein loss for a sample batch.
+    The Wasserstein loss function is very simple to calculate. In a standard GAN, the discriminator
+    has a sigmoid output, representing the probability that samples are real or generated. In Wasserstein
+    GANs, however, the output is linear with no activation function! Instead of being constrained to [0, 1],
+    the discriminator wants to make the distance between its output for real and generated samples as large as possible.
+    The most natural way to achieve this is to label generated samples -1 and real samples 1, instead of the
+    0 and 1 used in normal GANs, so that multiplying the outputs by the labels will give you the loss immediately.
+    Note that the nature of this loss means that it can be (and frequently will be) less than 0."""
+    return K.mean(y_true * y_pred)
 
 
 def custom_loss(loss="l2+gd"):
@@ -992,3 +1007,59 @@ def save_examples(name, test, predictions_dict, past, samples=0):
             colorbar(im)
     fig.savefig(f"Plots/{name}_sequence_prediction.png")
     plt.close()
+
+
+def sample_images(epoch, gan_test, gan_test_truth, past_input, generator):
+    n = 5
+    test_batch = gan_test[:n]
+    test_truth = gan_test_truth[:n]
+    gen_imgs = generator.predict(test_batch)
+    plot_range = past_input
+    fig, axs = plt.subplots(n, plot_range+2, figsize=(16, 16))
+    for i in range(n):
+        vmax = np.max([np.max(test_batch[i]), np.max(test_truth[i])])
+        vmin = 0
+        for j in range(plot_range):
+            im = axs[i,j].imshow(test_batch[i, :,:,j], vmax=vmax,vmin=vmin)
+            axs[i,j].axis('off')
+            colorbar(im)
+            axs[i,j].set_title("Frame t"+str([-past_input+1+j if j < past_input-1 else ""][0]))
+        im2 = axs[i,-2].imshow(test_truth[i, :,:,0], vmax=vmax, vmin=vmin)
+        axs[i,-2].axis('off')
+        colorbar(im2)
+        axs[i,-2].set_title("Frame t+1")
+        im3 = axs[i,-1].imshow(gen_imgs[i, :,:,0], vmax=vmax, vmin=vmin)
+        axs[i,-1].axis('off')
+        colorbar(im3)
+        axs[i,-1].set_title("Prediction t+1")
+    fig.savefig("Plots/epoch %d.png" % epoch)
+    plt.close()
+
+
+def plot_training_curves(log, epoch, name, wgan=False):
+    total_g_loss = np.array(log["g_loss"])[:, 0]
+
+    total_d_loss = np.array(log["d_loss"])[:, 0] if not wgan else np.array(log["d_loss"])
+    smoothed_tgl = smooth(np.array(log["g_loss"])[:, 0])
+    smoothed_tdl = smooth(np.array(log["d_loss"])[:, 0]) if not wgan else smooth(np.array(log["d_loss"]))
+    objective_loss = np.array(log["g_loss"])[:, 1]
+
+    f, (a0, a1) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [5, 2]})
+    a0.plot(total_g_loss, alpha=0.3, c="b")
+    a0.plot(smoothed_tgl, c="b", label="generator")
+    a0.grid()
+    if wgan:
+        a0.plot(np.array(log["d_loss_real"]), alpha=0.3, c="g", label="real")
+        a0.plot(np.array(log["d_loss_fake"]), alpha=0.3, c="r", label="fake")
+    else:
+        a0.plot(total_d_loss, alpha=0.3, c="orange")
+        a0.plot(smoothed_tdl, c="orange", label="discriminator")
+    a0.legend()
+    a1.plot(objective_loss, alpha=0.9, c="green", label="L1 objective")
+    a1.grid()
+    a1.legend()
+    f.text(0.5, 0, 'Iterations', ha='center', va='center')
+    f.text(0, 0.5, 'Loss', ha='center', va='center', rotation='vertical')
+
+    f.tight_layout()
+    f.savefig(f"Plots/{name}_epoch_{epoch}_curves.png")
