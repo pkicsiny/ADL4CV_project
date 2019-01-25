@@ -5,7 +5,7 @@ The goal is the prediction of rainy areas from radar images with deep generative
 
 Weather data source: https://opendata.dwd.de/weather/radar/composit/rx/
 <br>(Note: this server is continuously updated and contains the files for measurements of the past 48 hours. Older data is deleted.
-<br>See details at: https://www.dwd.de/DE/leistungen/opendata/hilfe.html?nn=16102&lsbId=625220 (bottom of page 4))
+<br>See details at: https://www.dwd.de/DE/leistungen/opendata/hilfe.html?nn=16102&lsbId=625220 (first file, bottom of page 4))
 
 The files contain rain measurements converted to unitless pixel intensities (0-255). To get back the values in mm/h, use the following formulas:
 <br>https://www.dwd.de/DE/leistungen/radolan/radolan_info/radolan_radvor_op_komposit_format_pdf.pdf?__blob=publicationFile&v=11 (page 10)
