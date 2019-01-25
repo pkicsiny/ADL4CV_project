@@ -1,6 +1,11 @@
 # ADL4CV_project
-Prediction of rainy areas from radar images with deep learning algorithms.
+Prediction of rainy areas from radar images with generative algorithms.
 
-Weather data source: ftp://ftp-cdc.dwd.de/pub/CDC/grids_germany/hourly/radolan/historical/asc/
+Weather data source: https://opendata.dwd.de/weather/radar/composit/rx/
+<br>(Note: this server is continuously updated and contains the files for measurements of the past 48 hours. Older data is deleted.
+<br>See details at: https://www.dwd.de/DE/leistungen/opendata/hilfe.html?nn=16102&lsbId=625220 (bottom of page 4))
 
-This is the open data server of the DWD (Deutscher Wetterdienst). Hourly is the highest time resolution available. The files contain rain measurements in 0.1mm in every hour (at XX:50). The measurements cover a 900km x 900km area over Germany and some adjacent areas. Resolution is 1km * 1km. The data is stored in .asc files that can be extracted with the np.loadtxt() numpy method in python. Thus you will get a 900 * 900 large 2D array with each element representing a 1km * 1km grid cell containing the rain height as an integer.
+The files contain rain measurements converted to unitless pixel intensities (0-255). To get back the values in mm/h, use the following formulas:<br>
+<br>https://www.dwd.de/DE/leistungen/radolan/radolan_info/radolan_radvor_op_komposit_format_pdf.pdf?__blob=publicationFile&v=11 (page 10)
+<br>https://web.archive.org/web/20160113151652/http://www.desktopdoppler.com/help/nws-nexrad.htm#rainfall%20rates <br>
+The radar maps are recorded with a 5 minutes frequency. The maps cover a 900km x 900km area over Germany and some adjacent areas. Spatial resolution is 1km * 1km per pixel. The data is stored in binary files and once downloaded, data can be loaded with the src.get_data() method.
