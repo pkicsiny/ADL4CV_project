@@ -1,4 +1,6 @@
 # ADL4CV_project
+This is a project in the subject "Advanced Deep Learning for Computer Vision".
+
 Prediction of rainy areas from radar images with generative algorithms.
 
 Weather data source: https://opendata.dwd.de/weather/radar/composit/rx/
