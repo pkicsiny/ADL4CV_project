@@ -238,7 +238,7 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
                     image[j, :, :] = rain_cut[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size]
                     image[j, :, :][image[j, :, :] < 0] = np.nan
             # masked array will get unmasked and nans become huge values
-            image[(np.isnan(image)) | (image > 1e5)] = np.nan
+            image[(np.isnan(image)) | (image > 1e5)] = np.nan  # this will be filtered out in the valid method
             if wind is not None:
                 valid = valid_image(image[:, :, :, 0])
             else:
@@ -308,8 +308,8 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
 def valid_image(image):
     """
     Filters out some useless data. In the junk variable several conditions are defined to check on the images.
-    Currently it checks the number of different entry values and if 0s or 1s make up 0.75 part of the whole data.
-    This throws out the cuts made inside or almost inside the mask region and rainless areas.
+    Currently it checks the number of different entry values and if 0 or 1 makes up 0.75 part of the whole data.
+    This throws out the cuts made inside the mask region and rainless areas.
     Still can be improved.
     :param image: 3D np array, dimensions are the number of consecutive frames, height and width
     :return: bool, whether the data instance is valid in terms of usability
@@ -428,7 +428,7 @@ def advect(image): # (64,64,3)
     padded[np.isnan(padded)] = 0
     #create array for advected frame
     advected = np.empty_like(image)
-    #advect (nans will be treated as 0s)
+    #advect
     advected[:,:,0] = image[:,:,0] - image[:,:,1]*(padded[1:,:,0] - padded[:-1,:,0])[:,:-1] - image[:,:,2]*(padded[:,1:,0] - padded[:,:-1,0])[:-1]
     #renormalize (saturate)
     advected[:,:,0][advected[:,:,0] < 0] = 0
@@ -609,6 +609,10 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, f
 
 
 def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), dropout=0, batchnorm=False, wgan=False):
+    """
+    from tempoGAN paper(Appendix A): "BN denotes batch normalization, which is not used in the
+    last layer of G, the first layer of Dt and the first layer of Ds [Radford et al. 2016]."
+    """
     # condition is the frame t (the original frame) or the sequence of past frames
     condition = keras.layers.Input(shape=condition_shape)
     # other is the generated prediction of frame t+1 or the ground truth frame t+1
@@ -617,8 +621,8 @@ def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), 
     combined_imgs = keras.layers.Concatenate(axis=-1)([condition, other])
 
     conv1 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(combined_imgs)
-    if batchnorm:
-        conv1   = keras.layers.BatchNormalization()(conv1)
+    #if batchnorm:
+    #    conv1   = keras.layers.BatchNormalization()(conv1)
     relu1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
     if (dropout > 0) and (dropout <= 1):
         relu1 = keras.layers.Dropout(dropout)(relu1)
@@ -664,8 +668,8 @@ def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1), 
 
 
     conv1 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(combined_imgs)
-    if batchnorm:
-        conv1 = keras.layers.BatchNormalization()(conv1)
+    #if batchnorm:
+    #    conv1 = keras.layers.BatchNormalization()(conv1)
     relu1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
     if (dropout > 0) and (dropout <= 1):
         relu1 = keras.layers.Dropout(dropout)(relu1)
