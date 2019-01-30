@@ -16,6 +16,8 @@ import keras.backend as K
 from ipywidgets import interact, IntSlider
 from IPython.display import display
 from sklearn.utils import shuffle
+from scipy.signal import savgol_filter
+from scipy import ndimage
 
 
 """
@@ -65,16 +67,19 @@ def get_data(data_dir, which="h", total_length=None, mask=True):
 def load_datasets(past_frames=1, future_frames=1, prediction=False):
     """
     If the data is already saved in .npz file then use this to load it.
-    :param dataset: str, which data: hourly or 5 minutes resolution or data for the dual discriminator gan (hourly too)
     :param past_frames: int, no. of past frames
     :param future_frames: int, no. of predictable frames
-    :param prediction: bool, if True it loads a long sequence for sequence prediction testing
+    :param prediction: bool, if True it loads a long sequence for sequence prediction testing, else it loads the normal
+    dataset for training
     :return: train, validation, test sets.
     """
     if not prediction:
-        train = decompress_data(filename=sys.path[0] + "/5min_train_compressed.npz")[:,:,:,:past_frames+future_frames]
-        xval = decompress_data(filename=sys.path[0] + "/5min_xval_compressed.npz")[:,:,:,:past_frames+future_frames]
-        test = decompress_data(filename=sys.path[0] + "/5min_test_compressed.npz")[:,:,:,:past_frames+future_frames]
+        train = decompress_data(filename=sys.path[0] + "/5min_train_compressed.npz")[
+                :, :, :, :past_frames+future_frames]
+        xval = decompress_data(filename=sys.path[0] + "/5min_xval_compressed.npz")[
+               :, :, :, :past_frames+future_frames]
+        test = decompress_data(filename=sys.path[0] + "/5min_test_compressed.npz")[
+               :, :, :, :past_frames+future_frames]
         print(f"Training data: {train.shape}\nValidation data: {xval.shape}\nTest data: {test.shape}")
         return train, xval, test
     else:
@@ -105,6 +110,7 @@ def split_datasets(train, xval, test, past_frames=1, future_frames=1, augment=Fa
     :param past_frames: int, no. of consec. frames that will be the input of the network
     :param future_frames: int, no. of consec. frames that will be the ground truth of the network
     :param augment: bool, if True, uses data augmentation by flip and rotation -> 8*(# of data)
+    :param shuffle_training_data: bool, shuffle data along first axis or not.
     :return: 6 numpy arrays
     """
     assert past_frames + future_frames <= train.shape[1], "Wrong frame specification!"
@@ -134,7 +140,7 @@ def get_rain_grid_coords(directory="rain_grid_coordinates"):
     :param directory: folder of the data file
     :return: dataframe of [latitude, longitude, ID] ID is an arbitrary integer enumeration of the cells.
     """
-    lon, lat = [pd.DataFrame([re.findall('..\......',row[0]) for idx,
+    lon, lat = [pd.DataFrame([re.findall('..\......', row[0]) for idx,
                               row in pd.read_table(sys.path[0]+f"/{directory}/{file}_center.txt",
                               header=None).iterrows()]) for file in ['lambda', 'phi']]
     coords = pd.DataFrame(columns={"LAT", "LON"})
@@ -152,9 +158,10 @@ def get_germany(w_vel, coords):
     So use this if the pickle is not available.
     Works with unflipped (original) wind grid. (Needs flipping around axis 0 afterwards.)
     """
-    germany = pd.DataFrame(data={'LAT':w_vel['lat'][:][~w_vel['FF'][0].mask],
-                             'LON':w_vel['lon'][:][~w_vel['FF'][0].mask],
-                             'CELL_ID':pd.DataFrame(w_vel['FF'][0].flatten()).dropna().index.values})[['LAT', 'LON', "CELL_ID"]]
+    germany = pd.DataFrame(data={'LAT': w_vel['lat'][:][~w_vel['FF'][0].mask],
+                                 'LON': w_vel['lon'][:][~w_vel['FF'][0].mask],
+                                 'CELL_ID': pd.DataFrame(w_vel['FF'][0].flatten()).dropna().index.values})[[
+                                                            'LAT', 'LON', "CELL_ID"]]
     # get closest radar grid cell to each wind cell
     germany["closest_idx"] = -1
     for i, point in enumerate(germany["CELL_ID"]):
@@ -164,6 +171,8 @@ def get_germany(w_vel, coords):
                                                      (germany.iloc[point]["LON"] - coords["LON"])**2).idxmin()
     with open('germany.pickle', 'wb') as handle:
         pickle.dump(germany, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
 """
 PREPROCESSING
 """
@@ -195,12 +204,15 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
     :param length: int, length in "time". Defines how many consecutive frames will belong to one instance.
     :param split: list or np array of either floats between 0 and 1 or positive integers. Set to None by deafult
     which means no splitting, just return all instances in one set.
+    :param normalize: bool, normalize into [0, 1] or not
+    :param task: str, either "prediction" or "upsampling" (for experimenting)
+    :param down_factor: int, donwsampling factor if the task is upsampling.
     :return: 3D np array, either one dataset of smaller image frames or three datasets for training,
     cross validating and testing. shape is: (n, h, w, c) If wind is given, shape will be (n, h, w, c, m) where m=3
     is the weather measurable: rho, vx, vy
     """
     ch = np.shape(rain)[0]
-    norm_factors = [] #store normalization max values
+    norm_factors = []  # store normalization max values
     if wind is not None:
         # wind timestamps are taken at xx:00:00 but rain is taken at xx:50:00
         # so I take the next index for the wind maps
@@ -233,7 +245,7 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
                 rain_cut = rain[anchor[0] + j]
                 if wind is not None:
                     image[j, :, :, 0] = rain_cut[anchor[1]:anchor[1] + size,
-                                        anchor[2]:anchor[2] + size]  # .filled(np.nan)
+                                                 anchor[2]:anchor[2] + size]  # .filled(np.nan)
                 else:
                     image[j, :, :] = rain_cut[anchor[1]:anchor[1] + size, anchor[2]:anchor[2] + size]
                     image[j, :, :][image[j, :, :] < 0] = np.nan
@@ -299,7 +311,7 @@ def generate_datasets(rain, wind=None, n=10, size=64, length=3, split=None, norm
         if task == "upsampling":  # downsample
             low_res_data = images[:, ::down_factor, ::down_factor]
             update_output(txt + f"\nShape of downsampled data: {np.shape(low_res_data)}")
-            return {"low_res_data": low_res_data, "images": images, "norm factors": norm_factors}  # data and ground truth
+            return {"low_res_data": low_res_data, "images": images, "norm factors": norm_factors}
         else:
             update_output(txt)
             return {"images": images, "norm factors": norm_factors}
@@ -316,34 +328,76 @@ def valid_image(image):
     """
     junk = [len(set(np.array(frame).flatten()[
                         np.array(frame).flatten() < 1e5])) <= 8 for frame in image]
+    # no nans
     junk += [len(np.array(frame).flatten()[
-                     np.array(frame).flatten() < 1e5]) < len(np.array(frame).flatten()) for frame in image] # no nans
+                     np.array(frame).flatten() < 1e5]) < len(np.array(frame).flatten()) for frame in image]
+    # many zeros
     junk += [len(np.array(frame).flatten()[
-                     np.array(frame).flatten()==0]) > 0.8*len(np.array(frame).flatten()) for frame in image]  # many zeros
+                     np.array(frame).flatten() == 0]) > 0.8*len(np.array(frame).flatten()) for frame in image]
+    # few zeros
     junk += [len(np.array(frame).flatten()[
-                     np.array(frame).flatten() == 0]) < 0.5*len(np.array(frame).flatten()) for frame in image]  # few zeros
+                     np.array(frame).flatten() == 0]) < 0.5*len(np.array(frame).flatten()) for frame in image]
     return 0 if any(junk) else 1
+
+
+def preprocess_flow(vx, vy):
+    """
+    Applies a normalization into [-1, 1] and a median filter smoothing on the flow images.
+    :param vx: np array, optical flow x component, shape: (n, h, w, 1)
+    :param vy: np array, optical flow y component, shape: (n, h, w, 1)
+    :return: preprocessed flows as np array, shape: (n, h, w, 2)
+    """
+    normalized_optical_flow = normalize_flows(vx, vy)
+    median = np.transpose([[
+        ndimage.median_filter(
+            image[..., ch], 4) for ch in range(2)] for image in normalized_optical_flow], (0, 2, 3, 1))
+    return median
+
+
+def normalize_flows(flow_x, flow_y):
+    """
+    Normalizes inputs into [-1, 1]
+    :param flow_x: np array, optical flow x component, shape: (n, h, w, 1)
+    :param flow_y: np array, optical flow y component, shape: (n, h, w, 1)
+    :return: normalized flows as np array, shape: (n, h, w, 2)
+    """
+    flow = np.concatenate((flow_x, flow_y), axis=-1)
+    return np.array([
+        2*(flow_pair - np.min(flow_pair)) / (np.max(flow_pair) - np.min(flow_pair)) - 1 for flow_pair in flow])
+
 
 """
 DATA AUGMENTATION
 """
 
-def augment_data(data, shuffle_training_data=False):
-    #dimensions are n, h, w, c
 
-    augmented_data= np.reshape([np.array([
+def augment_data(data, shuffle_training_data=False):
+    """
+    Does data augmentation by rotations in 90, 180 and 270 degrees.
+    :param data: np array of shape: (n, h, w, ch) where ch is the "time axis". Input data to be augmented.
+    :param shuffle_training_data: bool, if True then it shuffles the data before returning. Otherwise
+    the augmented rotations are next to each other in the array.
+    :return: Augmented data as np array of shape: (4*n, h, w, ch)
+    """
+    augmented_data = np.reshape([np.array([
                         data_sample,
-                    rotate(data_sample, "90"),
-                    rotate(data_sample, "180"),
-                    rotate(data_sample, "270")]) for data_sample in data], ((data.shape[0]*4,)+data.shape[1:]))
+                        rotate(data_sample, "90"),
+                        rotate(data_sample, "180"),
+                        rotate(data_sample, "270")]) for data_sample in data], ((data.shape[0]*4,)+data.shape[1:]))
     if shuffle_training_data:
         return shuffle(augmented_data)
     else:
         return augmented_data
 
-def rotate(img, degree):
 
-    assert degree in ["90","-270", "180", "-90", "270"], "Rotation degree must be in: [90, 180, 270, -90, -270]"
+def rotate(img, degree):
+    """
+    Function to do rotations by "degree" degrees.
+    :param img: Image to be rotated. numpy array of shape: (h, w, ch)
+    :param degree: int. Degrees to rotate with.
+    :return: Rotated image as np array of same shape as input.
+    """
+    assert degree in ["90", "-270", "180", "-90", "270"], "Rotation degree must be in: [90, 180, 270, -90, -270]"
     rotated = np.rot90(img)
     if degree in ["180", "-90", "270"]:
         rotated = np.rot90(rotated)
@@ -351,12 +405,20 @@ def rotate(img, degree):
         rotated = np.rot90(rotated)
     return rotated
 
+
 """
 UTILS
 """
 
+
 def noisy_d_labels(real, fake):
-    # idea: https://arxiv.org/pdf/1606.03498.pdf
+    """
+    idea: https://arxiv.org/pdf/1606.03498.pdf
+    Switches the label for 5% of the samples. Also does one sided label smoothing: 0.9 instead of 1.
+    :param real: numpy array of labels for the real images. Usually 1.
+    :param fake: same for fake images. Usually 0.
+    :return: Modified label arrays.
+    """
     batch_size = len(real)
     five_percent = int(0.05*batch_size)
     idx = np.random.randint(0, batch_size, five_percent)
@@ -375,72 +437,80 @@ def optical_flow(prev, curr, window_size=4, tau=1e-2, init=0):
     :param curr: numpy array of shape (n, h, w, 1)
     :param window_size: int, kernel window size
     :param tau: float, threshold value for eigenvalues
+    :param init: 0 or 1. If 1, prints progress with the update_output() method.
     :return: 2 numpy arrays of shape (n, h, w, 1)
     """
     kernel_x = np.array([[-1., 1.], [-1., 1.]])
     kernel_y = np.array([[-1., -1.], [1., 1.]])
-    kernel_t = np.array([[1., 1.], [1., 1.]])#*.25
-    w = int(window_size/2) # window_size is odd, all the pixels with offset in between [-w, w] are inside the window
+    kernel_t = np.array([[1., 1.], [1., 1.]])  # *.25
+    w = int(window_size/2)  # window_size is odd, all the pixels with offset in between [-w, w] are inside the window
     # Implement Lucas Kanade
     # for each point, calculate I_x, I_y, I_t
     mode = 'same'
     u = np.zeros(prev.shape)
     v = np.zeros(prev.shape)
     # within window window_size * window_size
-    for sample in range(prev.shape[0]): # loop over samples
+    for sample in range(prev.shape[0]):  # loop over samples
         if init == 1:
             update_output(f"[{sample+1}/{prev.shape[0]}]")
-        fx = signal.convolve2d(prev[sample,:,:,0], kernel_x, boundary='symm', mode=mode)
-        fy = signal.convolve2d(prev[sample,:,:,0], kernel_y, boundary='symm', mode=mode)
-        ft = signal.convolve2d(curr[sample,:,:,0], kernel_t, boundary='symm', mode=mode) + signal.convolve2d(
-                               prev[sample,:,:,0], -kernel_t, boundary='symm', mode=mode)
-        for i in range(w, int(prev[sample,:,:,0].shape[0]-w)):
-            for j in range(w, int(prev[sample,:,:,0].shape[1]-w)):
+        fx = signal.convolve2d(prev[sample, :, :, 0], kernel_x, boundary='symm', mode=mode)
+        fy = signal.convolve2d(prev[sample, :, :, 0], kernel_y, boundary='symm', mode=mode)
+        ft = signal.convolve2d(curr[sample, :, :, 0], kernel_t, boundary='symm', mode=mode) + signal.convolve2d(
+                               prev[sample, :, :, 0], -kernel_t, boundary='symm', mode=mode)
+        for i in range(w, int(prev[sample, :, :, 0].shape[0]-w)):
+            for j in range(w, int(prev[sample, :, :, 0].shape[1]-w)):
                 Ix = fx[i-w:i+w+1, j-w:j+w+1].flatten()
                 Iy = fy[i-w:i+w+1, j-w:j+w+1].flatten()
                 It = ft[i-w:i+w+1, j-w:j+w+1].flatten()
-                b = np.reshape(It, (It.shape[0],1))
+                b = np.reshape(It, (It.shape[0], 1))
                 A = np.vstack((Ix, Iy)).T
                 # if threshold tau is larger than the smallest eigenvalue of A'A:
                 if np.min(abs(np.linalg.eigvals(np.matmul(A.T, A)))) >= tau:
-                    nu = np.matmul(np.linalg.pinv(A), b) # get velocity here
-                    u[sample,i,j,0]=nu[0]
-                    v[sample,i,j,0]=nu[1]
-   # u = np.array([2*((uu - np.min(uu)) / (np.max(uu) - np.min(uu))) - 1 for uu in u])
-   # v = np.array([2*((vv - np.min(vv)) / (np.max(vv) - np.min(vv))) - 1 for vv in v])
+                    nu = np.matmul(np.linalg.pinv(A), b)  # get velocity here
+                    u[sample, i, j, 0] = nu[0]
+                    v[sample, i, j, 0] = nu[1]
     print(f"Optical flow map shapes: vx: {u.shape}, vy: {v.shape}")
     return u, v
 
-def normalize_flows(flow_x, flow_y):
-    flow = np.concatenate((flow_x, flow_y), axis=-1)
-    return np.array([2*(flow_pair - np.min(flow_pair)) / (np.max(flow_pair) - np.min(flow_pair)) - 1 for flow_pair in flow])
 
-def advect(image): # (64,64,3)
+def advect(image, order=1):  # (64,64,3)
     """
     Applies the physical advection (material derivative) on a density (rain) frame.
-    See: https://en.wikipedia.org/wiki/Advection
-    in short: r(t+1)=r(t)-vx(t)*drdx(t)-vy(t)*drdy(t)
-    :param image: one image with 3 channels: the advected material (rain desity) and the flow field (wind) x and y components.
+    Sources: https://en.wikipedia.org/wiki/Advection
+             https://perswww.kuleuven.be/~u0016541/Talks/advection.pdf
+             http://mantaflow.com/scenes.html
+    :param image: np array of shape (h, w, 3).
+     One image with 3 channels: the advected material (rain desity) and the flow field (wind) x and y components.
+    :param order: int, 1 or 2. Order of discretization for the advection equation.
+    :return: np array of shape (h, w, 1). Advected frame.
     """
-    #pad image
-    padded = np.pad(image,(0,1),'edge')[:,:,:-1]
-    #set nans to 0
+    assert order in [1, 2], "This supports only first and second order advection."
+    # create array for advected frame
+    advected = np.empty_like(image[..., 0:1])
+    # pad image
+    padded = np.pad(image, (1, 1), 'edge')[:, :, 1:-1]
+    # set nans to 0
     padded[np.isnan(padded)] = 0
-    #create array for advected frame
-    advected = np.empty_like(image)
-    #advect
-    advected[:,:,0] = image[:,:,0] - image[:,:,1]*(padded[1:,:,0] - padded[:-1,:,0])[:,:-1] - image[:,:,2]*(padded[:,1:,0] - padded[:,:-1,0])[:-1]
-    #renormalize (saturate)
-    advected[:,:,0][advected[:,:,0] < 0] = 0
-    advected[:,:,0][advected[:,:,0] > 1] = 1
-    #other channels stay the same
-    advected[:,:,1:] = image[:,:,1:]
-    return advected[:,:,0:1]  # (64, 64, 1) only rain
+    if order == 1:
+        advected = image[..., 0] - \
+             0.5 * image[..., 1] * (padded[2:, :, 0] - padded[:-2, :, 0])[:, 1:-1] - \
+             0.5 * image[..., 2] * (padded[:, 2:, 0] - padded[:, :-2, 0])[1:-1]
+    elif order == 2:
+        advected = image[..., 0] - \
+             0.5 * image[..., 1] * (padded[2:, :, 0] - padded[:-2, :, 0])[:, 1:-1] - \
+             0.5 * image[..., 2] * (padded[:, 2:, 0] - padded[:, :-2, 0])[1:-1] + \
+             0.5 * image[..., 1] ** 2 * (padded[2:, :, 0] + padded[:-2, :, 0] - 2 * padded[1:-1, :, 0])[:, 1:-1] + \
+             0.5 * image[..., 2] ** 2 * (padded[:, 2:, 0] + padded[:, :-2, 0] - 2 * padded[:, 1:-1, 0])[1:-1]
+    # renormalize (clamp)
+    advected[advected < 0] = 0
+    advected[advected > 1] = 1
+    return advected.reshape((advected.shape + (1,)))  # (64, 64, 1) only density
 
 
 def freeze_header(df, num_rows=30, num_columns=10, step_rows=1,
                   step_columns=1):
     """
+    idea: https://stackoverflow.com/questions/28778668/freeze-header-in-pandas-dataframe
     Freeze the headers (column and index names) of a Pandas DataFrame. A widget
     enables to slide through the rows and columns.
 
@@ -500,7 +570,7 @@ def compress_huge_data(huge_data, filename=None):
     :param filename: it has to be a string specifying the path and filename
     """
     compressed_array = io.BytesIO()
-    np.savez_compressed(filename,compressed_array, huge_data)
+    np.savez_compressed(filename, compressed_array, huge_data)
 
 
 def decompress_data(filename=None):
@@ -515,50 +585,53 @@ def decompress_data(filename=None):
 """
 NETWORKS
 """
-# "BN denotes batch normalization, which is not used in the
-# last layer of G, the first layer of Dt and the first layer of Ds [Radford et al. 2016]." from tempoGAN paper
+
 
 def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, feature_mult=1, relu_coeff=0.1):
     init = keras.layers.Input(shape=input_shape)
 
-    ConvDown1 = keras.layers.Conv2D(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(init) #32
+    ConvDown1 = keras.layers.Conv2D(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2),
+                                    padding="same")(init)  # 32
     if batchnorm:
         ConvDown1 = keras.layers.BatchNormalization()(ConvDown1)
     Lr1 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown1)
     if (dropout > 0) and (dropout <= 1):
         Lr1 = keras.layers.Dropout(dropout)(Lr1)
 
-    ConvDown2 = keras.layers.Conv2D(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr1) #16
+    ConvDown2 = keras.layers.Conv2D(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2),
+                                    padding="same")(Lr1)  # 16
     if batchnorm:
         ConvDown2 = keras.layers.BatchNormalization()(ConvDown2)
     Lr2 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown2)
     if (dropout > 0) and (dropout <= 1):
         Lr2 = keras.layers.Dropout(dropout)(Lr2)
 
-    ConvDown3 = keras.layers.Conv2D(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr2) # 8
+    ConvDown3 = keras.layers.Conv2D(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2),
+                                    padding="same")(Lr2)  # 8
     if batchnorm:
         ConvDown3 = keras.layers.BatchNormalization()(ConvDown3)
     Lr3 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown3)
     if (dropout > 0) and (dropout <= 1):
         Lr3 = keras.layers.Dropout(dropout)(Lr3)
 
-    ConvDown4 = keras.layers.Conv2D(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr3) # 4
+    ConvDown4 = keras.layers.Conv2D(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2),
+                                    padding="same")(Lr3)  # 4
     if batchnorm:
         ConvDown4 = keras.layers.BatchNormalization()(ConvDown4)
     Lr4 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown4)
     if (dropout > 0) and (dropout <= 1):
         Lr4 = keras.layers.Dropout(dropout)(Lr4)
 
-    ConvDown5 = keras.layers.Conv2D(filters=64*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr4) #2
+    ConvDown5 = keras.layers.Conv2D(filters=64*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2),
+                                    padding="same")(Lr4)  # 2
     if batchnorm:
         ConvDown5 = keras.layers.BatchNormalization()(ConvDown5)
     Lr5 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvDown5)
     if (dropout > 0) and (dropout <= 1):
         Lr5 = keras.layers.Dropout(dropout)(Lr5)
 
-
-    #UpSamp1 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr5) # 4
-    ConvUp4 = keras.layers.Conv2DTranspose(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(Lr5)
+    ConvUp4 = keras.layers.Conv2DTranspose(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size),
+                                           strides=(2, 2), padding="same")(Lr5)
     if batchnorm:
         ConvUp4 = keras.layers.BatchNormalization()(ConvUp4)
     Lr6 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp4)
@@ -566,9 +639,8 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, f
         Lr6 = keras.layers.Dropout(dropout)(Lr6)
     merge1 = keras.layers.concatenate([ConvDown4, Lr6], axis=-1)
 
-   # UpSamp2 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr6) #8
-    ConvUp3 = keras.layers.Conv2DTranspose(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge1)
-    #Conv2 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge2)
+    ConvUp3 = keras.layers.Conv2DTranspose(filters=32*feature_mult, kernel_size=(kernel_size, kernel_size),
+                                           strides=(2, 2), padding="same")(merge1)
     if batchnorm:
         ConvUp3 = keras.layers.BatchNormalization()(ConvUp3)
     Lr7 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp3)
@@ -576,9 +648,8 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, f
         Lr7 = keras.layers.Dropout(dropout)(Lr7)
     merge2 = keras.layers.concatenate([ConvDown3, Lr7], axis=-1)
 
-    #UpSamp3 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr7) #16
-    ConvUp2 = keras.layers.Conv2DTranspose(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge2)
-    #Conv3 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge3)
+    ConvUp2 = keras.layers.Conv2DTranspose(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size),
+                                           strides=(2, 2), padding="same")(merge2)
     if batchnorm:
         ConvUp2 = keras.layers.BatchNormalization()(ConvUp2)
     Lr8 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp2)
@@ -586,9 +657,8 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, f
         Lr8 = keras.layers.Dropout(dropout)(Lr8)
     merge3 = keras.layers.concatenate([ConvDown2, Lr8], axis=-1)
 
-    #UpSamp4 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr8) #32
-    #Conv4 = keras.layers.Conv2D(filters=32, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge4)
-    ConvUp1 = keras.layers.Conv2DTranspose(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size), strides=(2, 2), padding="same")(merge3)
+    ConvUp1 = keras.layers.Conv2DTranspose(filters=16*feature_mult, kernel_size=(kernel_size, kernel_size),
+                                           strides=(2, 2), padding="same")(merge3)
     if batchnorm:
         ConvUp1 = keras.layers.BatchNormalization()(ConvUp1)
     Lr9 = keras.layers.LeakyReLU(alpha=relu_coeff)(ConvUp1)
@@ -596,19 +666,14 @@ def unet(input_shape=(64, 64, 1), dropout=0.0, batchnorm=False, kernel_size=4, f
         Lr9 = keras.layers.Dropout(dropout)(Lr9)
     merge4 = keras.layers.concatenate([ConvDown1, Lr9], axis=-1)
 
-
-    #UpSamp5 = keras.layers.UpSampling2D(size=(2, 2), data_format="channels_last")(Lr9) #64
-    #Conv5 = keras.layers.Conv2D(filters=16, kernel_size=(4, 4), strides=(1, 1), padding="same")(merge5)
     ConvUp0 = keras.layers.Conv2DTranspose(filters=1, kernel_size=(kernel_size, kernel_size), strides=(2, 2),
                                            padding="same", activation='tanh')(merge4)
-
-    #Conv6 = keras.layers.Conv2D(filters=1, kernel_size=(4, 4), strides=(1, 1), #64
-    #                            padding="same", activation='tanh')(merge5)
 
     return keras.models.Model(inputs=init, outputs=ConvUp0)
 
 
-def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), dropout=0, batchnorm=False, wgan=False):
+def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1),
+                          dropout=0, batchnorm=False, wgan=False):
     """
     from tempoGAN paper(Appendix A): "BN denotes batch normalization, which is not used in the
     last layer of G, the first layer of Dt and the first layer of Ds [Radford et al. 2016]."
@@ -621,29 +686,27 @@ def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), 
     combined_imgs = keras.layers.Concatenate(axis=-1)([condition, other])
 
     conv1 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(combined_imgs)
-    #if batchnorm:
-    #    conv1   = keras.layers.BatchNormalization()(conv1)
     relu1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
     if (dropout > 0) and (dropout <= 1):
         relu1 = keras.layers.Dropout(dropout)(relu1)
 
     conv2 = keras.layers.Conv2D(filters=32, kernel_size=4, strides=2, padding='same')(relu1)
     if batchnorm:
-        conv2   = keras.layers.BatchNormalization()(conv2)
+        conv2 = keras.layers.BatchNormalization()(conv2)
     relu2 = keras.layers.LeakyReLU(alpha=0.2)(conv2)
     if (dropout > 0) and (dropout <= 1):
         relu2 = keras.layers.Dropout(dropout)(relu2)
 
     conv3 = keras.layers.Conv2D(filters=64, kernel_size=4, strides=2, padding='same')(relu2)
     if batchnorm:
-        conv3   = keras.layers.BatchNormalization()(conv3)
+        conv3 = keras.layers.BatchNormalization()(conv3)
     relu3 = keras.layers.LeakyReLU(alpha=0.2)(conv3)
     if (dropout > 0) and (dropout <= 1):
         relu3 = keras.layers.Dropout(dropout)(relu3)
 
     conv4 = keras.layers.Conv2D(filters=128, kernel_size=4, strides=2, padding='same')(relu3)
     if batchnorm:
-        conv4   = keras.layers.BatchNormalization()(conv4)
+        conv4 = keras.layers.BatchNormalization()(conv4)
     relu4 = keras.layers.LeakyReLU(alpha=0.2)(conv4)
     if (dropout > 0) and (dropout <= 1):
         relu4 = keras.layers.Dropout(dropout)(relu4)
@@ -657,8 +720,8 @@ def spatial_discriminator(input_shape=(64, 64, 1), condition_shape=(64, 64, 1), 
     return keras.models.Model(inputs=[condition, other], outputs=fcl1)
 
 
-def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1), dropout=0.3, batchnorm=False, wgan=False):
-  #  dropout = 0.5
+def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1),
+                           dropout=0.3, batchnorm=False, wgan=False):
     # A(G(x_{t-1})) or A(y_{t-1}) (A(frame t)=frame t+1)
     advected = keras.layers.Input(shape=advected_shape)
     # other is the generated prediction of t (frame t+1) or the ground truth of t (frame t+1)
@@ -666,10 +729,7 @@ def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1), 
     # Concatenate image and conditioning image by channels to produce input
     combined_imgs = keras.layers.Concatenate(axis=-1)([advected, other])
 
-
     conv1 = keras.layers.Conv2D(filters=16, kernel_size=4, strides=2, padding='same')(combined_imgs)
-    #if batchnorm:
-    #    conv1 = keras.layers.BatchNormalization()(conv1)
     relu1 = keras.layers.LeakyReLU(alpha=0.2)(conv1)
     if (dropout > 0) and (dropout <= 1):
         relu1 = keras.layers.Dropout(dropout)(relu1)
@@ -708,16 +768,42 @@ def temporal_discriminator(input_shape=(64, 64, 1), advected_shape=(64, 64, 1), 
 LOSS FUNCTIONS
 """
 
+
 def wasserstein_loss(y_true, y_pred):
-    """Calculates the Wasserstein loss for a sample batch.
-    The Wasserstein loss function is very simple to calculate. In a standard GAN, the discriminator
-    has a sigmoid output, representing the probability that samples are real or generated. In Wasserstein
-    GANs, however, the output is linear with no activation function! Instead of being constrained to [0, 1],
-    the discriminator wants to make the distance between its output for real and generated samples as large as possible.
-    The most natural way to achieve this is to label generated samples -1 and real samples 1, instead of the
-    0 and 1 used in normal GANs, so that multiplying the outputs by the labels will give you the loss immediately.
-    Note that the nature of this loss means that it can be (and frequently will be) less than 0."""
     return K.mean(y_true * y_pred)
+
+
+def gradient_penalty_loss(y_true, y_pred, averaged_samples, gradient_penalty_weight):
+    """Calculates the gradient penalty loss for a batch of "averaged" samples.
+    source: https://github.com/keras-team/keras-contrib/blob/master/examples/improved_wgan.py
+    In Improved WGANs, the 1-Lipschitz constraint is enforced by adding a term to the loss function
+    that penalizes the network if the gradient norm moves away from 1. However, it is impossible to evaluate
+    this function at all points in the input space. The compromise used in the paper is to choose random points
+    on the lines between real and generated samples, and check the gradients at these points. Note that it is the
+    gradient w.r.t. the input averaged samples, not the weights of the discriminator, that we're penalizing!
+    In order to evaluate the gradients, we must first run samples through the generator and evaluate the loss.
+    Then we get the gradients of the discriminator w.r.t. the input averaged samples.
+    The l2 norm and penalty can then be calculated for this gradient.
+    Note that this loss function requires the original averaged samples as input, but Keras only supports passing
+    y_true and y_pred to loss functions. To get around this, we make a partial() of the function with the
+    averaged_samples argument, and use that for model training."""
+    # first get the gradients:
+    #   assuming: - that y_pred has dimensions (batch_size, 1)
+    #             - averaged_samples has dimensions (batch_size, nbr_features)
+    # gradients afterwards has dimension (batch_size, nbr_features), basically
+    # a list of nbr_features-dimensional gradient vectors
+    gradients = K.gradients(y_pred, averaged_samples)[0]
+    # compute the euclidean norm by squaring ...
+    gradients_sqr = K.square(gradients)
+    #   ... summing over the rows ...
+    gradients_sqr_sum = K.sum(gradients_sqr,
+                              axis=np.arange(1, len(gradients_sqr.shape)))
+    #   ... and sqrt
+    gradient_l2_norm = K.sqrt(gradients_sqr_sum)
+    # compute lambda * (1 - ||grad||)^2 still for each single sample
+    gradient_penalty = gradient_penalty_weight * K.square(1 - gradient_l2_norm)
+    # return the mean as loss over all the batch samples
+    return K.mean(gradient_penalty)
 
 
 def custom_loss(loss="l2+gd"):
@@ -789,6 +875,7 @@ def relative_error_tensor(truth, predictions):
     print(results)
     print(truth)
     return results
+
 
 """
 METRICS
@@ -883,11 +970,14 @@ def calculate_skill_scores(ypredicted, ytruth, x=None, threshold=5):
 
     # correlation
     scores["corr_to_truth"] = [np.sum(
-        ypredicted[i]*ytruth[i]) / (np.sqrt(np.sum(ypredicted[i]**2)*np.sum(ytruth[i]**2)) + 1e-9) for i in range(len(ypredicted))]
+        ypredicted[i]*ytruth[i]) / (np.sqrt(np.sum(ypredicted[i]**2)*np.sum(ytruth[i]**2)) + 1e-9) for i in range(
+        len(ypredicted))]
     if x is not None:
         scores["corr_to_input"] = [np.sum(
-            ypredicted[i]*x[i]) / (np.sqrt(np.sum(ypredicted[i]**2)*np.sum(x[i]**2)) + 1e-9) for i in range(len(ypredicted))]
+            ypredicted[i]*x[i]) / (np.sqrt(np.sum(ypredicted[i]**2)*np.sum(x[i]**2)) + 1e-9) for i in range(
+            len(ypredicted))]
     return scores
+
 
 """
 VISUALISATION
@@ -917,7 +1007,7 @@ def visualise_data(images, cmap='viridis', facecolor='w'):
             plt.imshow(images[n, :, :, i, 2], cmap=cmap)
         else:
             plt.subplot(1, t, i + 1)
-            plt.imshow(images[n,:,:,t], cmap=cmap)
+            plt.imshow(images[n, :, :, t], cmap=cmap)
         plt.title(f"Instance #{n+1} from {num_img}\nFrame: {i}")
     plt.subplots_adjust(hspace=0.3, wspace=0.3)
 
@@ -927,6 +1017,7 @@ def error_distribution(truth, predictions, nbins=20, metric="difference"):
     plot relative error dist. of results
     :param truth: ground truth
     :param predictions: predictions of network
+    :param nbins: int, number of bins on the histogram
     :param metric: difference or relative_error
     :return: nothing (plots relative error distributions)
     """
@@ -958,7 +1049,8 @@ def result_plotter(indices, datasets, save=True):
     """
     title = ['Frame t', 'Frame t+1', 'Prediction t+1', 'Pixelwise difference']
     for i in indices:
-        fig, axes = plt.subplots(nrows=1, ncols=len(datasets), num=None, figsize=(16, 16), dpi=80, facecolor='w', edgecolor='k')
+        fig, axes = plt.subplots(nrows=1, ncols=len(datasets), num=None, figsize=(16, 16), dpi=80,
+                                 facecolor='w', edgecolor='k')
         for j, ax in enumerate(axes.flat):
             im = ax.imshow(datasets[j][int(i)], vmin=0,
                            vmax=max([np.max(dset[int(i)]) for dset in datasets[:2]]) if int(j) < 3 else None)
@@ -968,10 +1060,13 @@ def result_plotter(indices, datasets, save=True):
             ax.axis('off')
         if save:
             plt.savefig(f"Plots/Sample_{i}.png")
-    #plt.show()
 
 
 def colorbar(mappable):
+    """
+    idea: https://joseph-long.com/writing/colorbars/
+    Colorbar fixing function.
+    """
     from mpl_toolkits.axes_grid1 import make_axes_locatable
     ax = mappable.axes
     fig = ax.figure
@@ -980,40 +1075,61 @@ def colorbar(mappable):
     return fig.colorbar(mappable, cax=cax)
 
 
-from scipy.signal import savgol_filter
 def smooth(curve):
+    """
+    Smoothed curve to plot.
+    :param curve: List of floats. The plotted curve to be smoothed.
+    :return: Smoothed curve with Savitzky-Golay filter.
+    """
     return savgol_filter(curve, 51, 3)
 
 
 def save_examples(name, test, predictions_dict, past, samples=0):
+    """
+    Method used for plotting sequence predictions.
+    :param name: str, name of the network training. Defined in the beginning of the notebooks.
+    :param test: np array, test set for sequence prediction.
+    :param predictions_dict: dict, dictionary of predictions. Keys are integers from 0 to the no. of predicted
+     consecutive frames.
+    :param past: int, number of past frames as input for the generator.
+    :param samples: list of integers. The sample indices to be plotted.
+    """
     fig, axs = plt.subplots(len(samples)*2,past+4, figsize=(32, 32))
     fig.subplots_adjust(wspace=0.3, hspace=0.0)
     for n in range(len(samples)):
-        vmax = np.max(test[n,:,:,:past])
+        vmax = np.max(test[n, :, :, :past])
         vmin = 0
         for i in range(past):
-            im = axs[2*n,i].imshow(test[samples[n], :,:,i], vmax=vmax,vmin=vmin)
-            axs[2*n,i].axis('off')
-            axs[2*n,i].set_title(f"Past frame {i+1}")
+            im = axs[2*n, i].imshow(test[samples[n], :, :, i], vmax=vmax, vmin=vmin)
+            axs[2*n, i].axis('off')
+            axs[2*n, i].set_title(f"Past frame {i+1}")
             colorbar(im)
-            im = axs[2*n+1,i].imshow(test[samples[n], :,:,i], vmax=vmax,vmin=vmin)
-            axs[2*n+1,i].axis('off')
-            axs[2*n+1,i].set_title(f"Past frame {i+1}")
+            im = axs[2*n+1, i].imshow(test[samples[n], :, :, i], vmax=vmax, vmin=vmin)
+            axs[2*n+1, i].axis('off')
+            axs[2*n+1, i].set_title(f"Past frame {i+1}")
             colorbar(im)
-        for i in range(past,past+4):
-            im = axs[2*n,i].imshow(predictions_dict[f"{i-past}"][samples[n], :,:,0], vmax=vmax, vmin=vmin)
-            axs[2*n,i].axis('off')
-            axs[2*n,i].set_title(f"Predicted frame {i-past+1}")
+        for i in range(past, past+4):
+            im = axs[2*n, i].imshow(predictions_dict[f"{i-past}"][samples[n], :, :, 0], vmax=vmax, vmin=vmin)
+            axs[2*n, i].axis('off')
+            axs[2*n, i].set_title(f"Predicted frame {i-past+1}")
             colorbar(im)
-            im = axs[2*n+1,i].imshow(test[samples[n], :,:,i], vmax=vmax, vmin=vmin)
-            axs[2*n+1,i].axis('off')
-            axs[2*n+1,i].set_title(f"Reference frame {i-past+1}")
+            im = axs[2*n+1, i].imshow(test[samples[n], :, :, i], vmax=vmax, vmin=vmin)
+            axs[2*n+1, i].axis('off')
+            axs[2*n+1, i].set_title(f"Reference frame {i-past+1}")
             colorbar(im)
     fig.savefig(f"Plots/{name}_sequence_prediction.png")
     plt.close()
 
 
 def sample_images(epoch, gan_test, gan_test_truth, past_input, generator):
+    """
+    Samples the first 5 images from the validation or test set during training.
+    :param epoch: int, current epoch or iteration
+    :param gan_test: np array, validation or test dataset
+    :param gan_test_truth: np array, validation or test ground truth dataset
+    :param past_input: int, number of past frames in the input
+    :param generator: keras model object. The generator of the GAN.
+    """
     n = 5
     test_batch = gan_test[:n]
     test_truth = gan_test_truth[:n]
@@ -1024,23 +1140,30 @@ def sample_images(epoch, gan_test, gan_test_truth, past_input, generator):
         vmax = np.max([np.max(test_batch[i]), np.max(test_truth[i])])
         vmin = 0
         for j in range(plot_range):
-            im = axs[i,j].imshow(test_batch[i, :,:,j], vmax=vmax,vmin=vmin)
-            axs[i,j].axis('off')
+            im = axs[i, j].imshow(test_batch[i, :, :, j], vmax=vmax, vmin=vmin)
+            axs[i, j].axis('off')
             colorbar(im)
-            axs[i,j].set_title("Frame t"+str([-past_input+1+j if j < past_input-1 else ""][0]))
-        im2 = axs[i,-2].imshow(test_truth[i, :,:,0], vmax=vmax, vmin=vmin)
-        axs[i,-2].axis('off')
+            axs[i, j].set_title("Frame t"+str([-past_input+1+j if j < past_input-1 else ""][0]))
+        im2 = axs[i, -2].imshow(test_truth[i, :, :, 0], vmax=vmax, vmin=vmin)
+        axs[i, -2].axis('off')
         colorbar(im2)
-        axs[i,-2].set_title("Frame t+1")
-        im3 = axs[i,-1].imshow(gen_imgs[i, :,:,0], vmax=vmax, vmin=vmin)
-        axs[i,-1].axis('off')
+        axs[i, -2].set_title("Frame t+1")
+        im3 = axs[i, -1].imshow(gen_imgs[i, :, :, 0], vmax=vmax, vmin=vmin)
+        axs[i, -1].axis('off')
         colorbar(im3)
-        axs[i,-1].set_title("Prediction t+1")
+        axs[i, -1].set_title("Prediction t+1")
     fig.savefig("Plots/epoch %d.png" % epoch)
     plt.close()
 
 
 def plot_training_curves(log, epoch, name, wgan=False):
+    """
+    Method to plot training curves. Also saves them.
+    :param log: dictionary where values are lists of the training losses and metrics.
+    :param epoch: int, epoch or iteration number.
+    :param name: str, name of the training.
+    :param wgan: bool, if True then the plotting algorithm needs to change accordingly.
+    """
     total_g_loss = np.array(log["g_loss"])[:, 0]
 
     total_d_loss = np.array(log["d_loss"])[:, 0] if not wgan else np.array(log["d_loss"])
@@ -1053,11 +1176,53 @@ def plot_training_curves(log, epoch, name, wgan=False):
     a0.plot(smoothed_tgl, c="b", label="generator")
     a0.grid()
     if wgan:
-        a0.plot(np.array(log["d_loss_real"]), alpha=0.3, c="g", label="real")
-        a0.plot(np.array(log["d_loss_fake"]), alpha=0.3, c="r", label="fake")
+        a0.plot(np.array(log["d_loss_real"]), c="g", label="real")
+        a0.plot(np.array(log["d_loss_fake"]), c="r", label="fake")
     else:
         a0.plot(total_d_loss, alpha=0.3, c="orange")
         a0.plot(smoothed_tdl, c="orange", label="discriminator")
+    a0.legend()
+    a1.plot(objective_loss, alpha=0.9, c="green", label="L1 objective")
+    a1.grid()
+    a1.legend()
+    f.text(0.5, 0, 'Iterations', ha='center', va='center')
+    f.text(0, 0.5, 'Loss', ha='center', va='center', rotation='vertical')
+
+    f.tight_layout()
+    f.savefig(f"Plots/{name}_epoch_{epoch}_curves.png")
+
+
+def plot_temporal_training_curves(log, epoch, name, wgan=False):
+    """
+    Plot training curves for double discriminator GAN.
+    :param log: dict, where the values are lists for the training curves.
+    :param epoch: int, number of the current iteration or epoch
+    :param name: str, name of the training. Defined in the notebook.
+    :param wgan: bool, if True then the plotting algorithm needs to change accordingly.
+    """
+    total_g_loss = np.array(log["g_loss"])[:, 0]
+    smoothed_tgl = smooth(np.array(log["g_loss"])[:, 0])
+
+    objective_loss = np.array(log["g_loss"])[:, 1]
+
+    f, (a0, a1) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [5, 2]})
+    a0.plot(total_g_loss, alpha=0.3, c="b")
+    a0.plot(smoothed_tgl, c="b", label="G")
+    if wgan:
+        a0.plot(np.array(log["ds_loss_real"]), c="g", label="Ds_real")
+        a0.plot(np.array(log["ds_loss_fake"]), c="r", label="Ds_fake")
+        a0.plot(np.array(log["dt_loss_real"]), c="g", label="Dt_real", linestyle="--")
+        a0.plot(np.array(log["dt_loss_fake"]), c="r", label="Dt_fake", linestyle="--")
+    else:
+        total_ds_loss = np.array(log["ds_loss"])
+        total_dt_loss = np.array(log["dt_loss"])
+        smoothed_tdsl = smooth(np.array(log["ds_loss"]))
+        smoothed_tdtl = smooth(np.array(log["dt_loss"]))
+        a0.plot(total_ds_loss, alpha=0.3, c="orange")
+        a0.plot(total_dt_loss, alpha=0.3, c="red")
+        a0.plot(smoothed_tdsl, c="orange", label="Ds")
+        a0.plot(smoothed_tdtl, c="red", label="Dt")
+    a0.grid()
     a0.legend()
     a1.plot(objective_loss, alpha=0.9, c="green", label="L1 objective")
     a1.grid()
