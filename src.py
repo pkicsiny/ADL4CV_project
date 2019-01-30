@@ -64,13 +64,14 @@ def get_data(data_dir, which="h", total_length=None, mask=True):
     return inputs
 
 
-def load_datasets(past_frames=1, future_frames=1, prediction=False):
+def load_datasets(past_frames=1, future_frames=1, prediction=False, steps=1):
     """
     If the data is already saved in .npz file then use this to load it.
     :param past_frames: int, no. of past frames
     :param future_frames: int, no. of predictable frames
     :param prediction: bool, if True it loads a long sequence for sequence prediction testing, else it loads the normal
     dataset for training
+    :param steps: int, no. of steps btw. each frames
     :return: train, validation, test sets.
     """
     if not prediction:
