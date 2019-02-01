@@ -64,29 +64,41 @@ def get_data(data_dir, which="h", total_length=None, mask=True):
     return inputs
 
 
-def load_datasets(past_frames=1, future_frames=1, prediction=False):
+def load_datasets(past_frames=1, future_frames=1, prediction=False, steps=1):
     """
     If the data is already saved in .npz file then use this to load it.
     :param past_frames: int, no. of past frames
     :param future_frames: int, no. of predictable frames
     :param prediction: bool, if True it loads a long sequence for sequence prediction testing, else it loads the normal
     dataset for training
+    :param steps: int, no. of steps btw. each frames
     :return: train, validation, test sets.
     """
     if not prediction:
-        train = decompress_data(filename=sys.path[0] + "/5min_train_compressed.npz")[
-                :, :, :, :past_frames+future_frames]
-        xval = decompress_data(filename=sys.path[0] + "/5min_xval_compressed.npz")[
-               :, :, :, :past_frames+future_frames]
-        test = decompress_data(filename=sys.path[0] + "/5min_test_compressed.npz")[
-               :, :, :, :past_frames+future_frames]
+        if steps == 1 :
+            train = decompress_data(filename=sys.path[0] + "/5min_train_compressed.npz")[
+                    :, :, :, :past_frames+future_frames]
+            xval = decompress_data(filename=sys.path[0] + "/5min_xval_compressed.npz")[
+                   :, :, :, :past_frames+future_frames]
+            test = decompress_data(filename=sys.path[0] + "/5min_test_compressed.npz")[
+                   :, :, :, :past_frames+future_frames]
+        elif steps > 1 :
+            idx = range(0, (past_frames+future_frames)*steps, steps)
+            if max(idx) >= 8 :
+                print('max index is over 8, do not have data.')
+                return
+            train = decompress_data(filename=sys.path[0] + "/5min_train_compressed.npz")[
+                    :, :, :, idx]
+            xval = decompress_data(filename=sys.path[0] + "/5min_xval_compressed.npz")[
+                   :, :, :, idx]
+            test = decompress_data(filename=sys.path[0] + "/5min_test_compressed.npz")[
+                   :, :, :, idx]
         print(f"Training data: {train.shape}\nValidation data: {xval.shape}\nTest data: {test.shape}")
         return train, xval, test
     else:
         long_test = decompress_data(filename=sys.path[0] + "/5min_long_pred_compressed.npz")
         print(f"Test data: {long_test.shape}")
         return long_test
-
 
 def reduce_dims(images):
     """
