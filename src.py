@@ -1232,3 +1232,30 @@ def plot_temporal_training_curves(log, epoch, name, wgan=False):
 
     f.tight_layout()
     f.savefig(f"Plots/{name}_epoch_{epoch}_curves.png")
+
+
+def plot_advections(advected_aux_gen, advected_aux_truth, it):
+    """
+    Plots some example advected frames during training.
+    :param advected_aux_gen: advected frame of a batch of generated images. Shape: (batch_size, h, w, 1)
+    :param advected_aux_truth: advected frame of a batch of ground truth images. Shape: (batch_size, h, w, 1)
+    :param it: int, current interation number
+    """
+    gen = advected_aux_gen[:5]
+    truth = advected_aux_truth[:5]
+    fig, axs = plt.subplots(5, 2, figsize=(16, 16))
+    for i in range(5):
+        vmax = np.max([np.max(gen[i]), np.max(truth[i])])
+        vmin = 0
+        im = axs[i, 0].imshow(gen[i, :, :, 0], vmax=vmax, vmin=vmin)
+        axs[i, 0].axis('off')
+        src.colorbar(im)
+        axs[i, 0].set_title("Advected generated frame")
+
+        im = axs[i, 1].imshow(truth[i, :, :, 0], vmax=vmax, vmin=vmin)
+        axs[i, 1].axis('off')
+        src.colorbar(im)
+        axs[i, 1].set_title("Advected reference frame")
+
+    fig.savefig("Plots/advections_epoch %d.png" % it)
+    plt.close()
