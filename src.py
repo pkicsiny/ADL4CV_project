@@ -1261,12 +1261,12 @@ def plot_advections(advected_aux_gen, advected_aux_truth, it):
         vmin = 0
         im = axs[i, 0].imshow(gen[i, :, :, 0], vmax=vmax, vmin=vmin)
         axs[i, 0].axis('off')
-        src.colorbar(im)
+        colorbar(im)
         axs[i, 0].set_title("Advected generated frame")
 
         im = axs[i, 1].imshow(truth[i, :, :, 0], vmax=vmax, vmin=vmin)
         axs[i, 1].axis('off')
-        src.colorbar(im)
+        colorbar(im)
         axs[i, 1].set_title("Advected reference frame")
 
     fig.savefig("Plots/advections_epoch %d.png" % it)
