@@ -1054,7 +1054,7 @@ def error_distribution(truth, predictions, nbins=20, metric="difference"):
 
 def result_plotter(indices, datasets, save=True):
     """
-    Plots result images.
+    Plots result images. Used for generator comparison.
     :param indices: list of integers. These are the indices of the images of the result.
     :param datasets: list of arrays.
     :param save: bool, save figures
@@ -1096,7 +1096,7 @@ def smooth(curve):
     return savgol_filter(curve, 51, 3)
 
 
-def save_examples(name, test, predictions_dict, past, samples=0):
+def sequence_prediction_plot(name, test, predictions_dict, past, samples=0):
     """
     Method used for plotting sequence predictions.
     :param name: str, name of the network training. Defined in the beginning of the notebooks.
@@ -1106,7 +1106,7 @@ def save_examples(name, test, predictions_dict, past, samples=0):
     :param past: int, number of past frames as input for the generator.
     :param samples: list of integers. The sample indices to be plotted.
     """
-    fig, axs = plt.subplots(len(samples)*2,past+4, figsize=(32, 32))
+    fig, axs = plt.subplots(len(samples)*2,past+len(predictions_dict.keys()), figsize=(32, 32))
     fig.subplots_adjust(wspace=0.3, hspace=0.0)
     for n in range(len(samples)):
         vmax = np.max(test[n, :, :, :past])
@@ -1120,7 +1120,7 @@ def save_examples(name, test, predictions_dict, past, samples=0):
             axs[2*n+1, i].axis('off')
             axs[2*n+1, i].set_title(f"Past frame {i+1}")
             colorbar(im)
-        for i in range(past, past+4):
+        for i in range(past, past+len(predictions_dict.keys())):
             im = axs[2*n, i].imshow(predictions_dict[f"{i-past}"][samples[n], :, :, 0], vmax=vmax, vmin=vmin)
             axs[2*n, i].axis('off')
             axs[2*n, i].set_title(f"Predicted frame {i-past+1}")
@@ -1130,6 +1130,30 @@ def save_examples(name, test, predictions_dict, past, samples=0):
             axs[2*n+1, i].set_title(f"Reference frame {i-past+1}")
             colorbar(im)
     fig.savefig(f"Plots/{name}_sequence_prediction.png")
+    plt.close()
+
+
+def validate_on_batch(generator, gan_val, gan_val_truth, batch_size, log, it):
+    """
+    Validates objective loss on a batch.
+    :param generator: keras model for generator
+    :param gan_val: np array of validation dataset, shape: (n, h, w, t)
+    :param gan_val_truth: np array for validation ground truth, shape: (n, h, w, t)
+    :batch_size: int for batch size
+    :param log: dict containing lossses as lists
+    """
+    idx = np.random.choice(gan_val.shape[0], batch_size, replace=False)
+    validation_truth = gan_val_truth[idx]
+    validation_batch = gan_val[idx]
+    validation_loss = generator.test_on_batch(validation_batch, validation_truth)
+    log["val_loss"].append(validation_loss)
+    log["val_loss_x_coord"].append(it)
+    plt.figure()
+    plt.plot(log["val_loss_x_coord"], log["val_loss"])
+    plt.grid()
+    plt.xlabel("Iteration")
+    plt.ylabel("Loss")
+    plt.savefig(f"Plots/{it}_validation_loss.png")
     plt.close()
 
 
