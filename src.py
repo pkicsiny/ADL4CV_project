@@ -991,6 +991,26 @@ def calculate_skill_scores(ypredicted, ytruth, x=None, threshold=5):
     return scores
 
 
+def get_scores(ypred, ytruth, n_next, past, thresholds_as_list=[0.5]):
+    """
+    Method for calculating evaluation scores.
+    :param ypred: np array of predictions. Shape: (n, h, w, t)
+    :param ytruth:
+    :param n_next:
+    :param past:
+    :param thresholds_as_list:
+    :return:
+    """
+    scores = {}
+    for t in range(n_next): # loop over the predictions
+        update_output(t)
+        for s in thresholds_as_list: # make a dict entry for each threshold score
+            scores[f"pred_{t+1}"] = calculate_skill_scores(ypred[...,t:t+1],
+                                                           ytruth[...,past+t:past+1+t],
+                                                           x=ytruth[...,past-1:past],
+                                                           threshold=s)
+    return scores
+
 """
 VISUALISATION
 """
