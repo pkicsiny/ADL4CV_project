@@ -334,7 +334,6 @@ def valid_image(image):
     Filters out some useless data. In the junk variable several conditions are defined to check on the images.
     Currently it checks the number of different entry values and if 0 or 1 makes up 0.75 part of the whole data.
     This throws out the cuts made inside the mask region and rainless areas.
-    Still can be improved.
     :param image: 3D np array, dimensions are the number of consecutive frames, height and width
     :return: bool, whether the data instance is valid in terms of usability
     """
@@ -994,12 +993,12 @@ def calculate_skill_scores(ypredicted, ytruth, x=None, threshold=5):
 def get_scores(ypred, ytruth, n_next, past, thresholds_as_list=[0.5]):
     """
     Method for calculating evaluation scores.
-    :param ypred: np array of predictions. Shape: (n, h, w, t)
-    :param ytruth:
-    :param n_next:
-    :param past:
-    :param thresholds_as_list:
-    :return:
+    :param ypred: np array of predictions. Shape: (n, h, w, t) (t = time axis)
+    :param ytruth: np array of ground truth frames. Shape: (n, h, w, n_next) 
+    :param n_next: int, how many frames were predicted
+    :param past: int, time axis length of input
+    :param thresholds_as_list: list of floats, threshold values for binary mapping
+    :return: dict of scores where values are a list of n floats; a score number for each pred-truth pair
     """
     scores = {}
     for t in range(n_next): # loop over the predictions
