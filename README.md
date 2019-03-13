@@ -11,7 +11,9 @@ The files contain rain measurements converted to unitless pixel intensities (0-2
 <br>https://www.dwd.de/DE/leistungen/radolan/radolan_info/radolan_radvor_op_komposit_format_pdf.pdf?__blob=publicationFile&v=11 (page 10)
 <br>https://web.archive.org/web/20160113151652/http://www.desktopdoppler.com/help/nws-nexrad.htm#rainfall%20rates <br>
 
-The radar maps are recorded with 5 minutes frequency. The maps are uniformly masked and cover a 900km x 900km area over Germany and some adjacent areas. Spatial resolution is 1km * 1km per pixel. The data is stored in binary files and once downloaded, it can be loaded with the src.get_data() method.
+The radar maps are recorded with 5 minutes frequency. The maps are uniformly masked and cover a 900km x 900km area over Germany and some adjacent areas. Spatial resolution is 1km * 1km per pixel. The data is stored in binary files and once downloaded, it can be loaded with the src.get_data() method. We use the radar maps to randomly crop 64 X 64 pixel frame sequences and validate them to prevent having masked parts, empty and overly saturated frames. This dataset is then used as input for the networks.
+
+The rough idea of our approach is depicted below.
 
 The gif below shows the evolution of some example predictions during training (from the validation set) by using two frames as input to predict the following frame. The GAN used here has two discriminators (spatial+temporal) and was our best performing model. It uses Wasserstein loss with gradient penalty. This particular training had 5000 iterations and predictions are shown at every 200th iteration.
 
