@@ -15,6 +15,12 @@ The radar maps are recorded with 5 minutes frequency. The maps are uniformly mas
 
 The rough idea of our approach is depicted below.
 
-The gif below shows the evolution of some example predictions during training (from the validation set) by using two frames as input to predict the following frame. The GAN used here has two discriminators (spatial+temporal) and was our best performing model. It uses Wasserstein loss with gradient penalty. This particular training had 5000 iterations and predictions are shown at every 200th iteration.
+<p align="center">
+  <img src=plots/arch.png>
+</p>
+  
+The generator is a U-net and it gets a sequence of consecutive frames and outputs the next frame at timestamp t+1. The first (spatial) discriminator gets the whole sequence as input with the prediction or ground truth appended to it. The second (temporal) discriminator uses precalculated optical flows to warp the last frame of the input into a "physically correct" representation of the next frame with the second order discretized advection (warp) equation. This is then appended to the prediction/ground truth and fed into the discriminator as input. The two discriminators only differ in their inputs but have identical architecture.
+
+The gif below shows the evolution of some example predictions during training (from the validation set) by using two frames as input to predict the following frame. The GAN has two discriminators (spatial+temporal) and was our best performing model. It uses Wasserstein loss with gradient penalty. This particular training had 5000 iterations and predictions are shown at every 200th iteration.
 
 ![](plots/iw-tgan.gif)
