@@ -13,6 +13,6 @@ The files contain rain measurements converted to unitless pixel intensities (0-2
 
 The radar maps are recorded with 5 minutes frequency. The maps are uniformly masked and cover a 900km x 900km area over Germany and some adjacent areas. Spatial resolution is 1km * 1km per pixel. The data is stored in binary files and once downloaded, it can be loaded with the src.get_data() method.
 
-The gifs below show some example predictions from the validation set during training. The GAN used here has two discriminators (spatial+temporal) with Wasserstein loss and gradient penalty.
+The gif below shows some example predictions by using two frames as input to predict the following frame. The GAN used here has two discriminators (spatial+temporal) with Wasserstein loss and gradient penalty.
 
 ![](plots/iw-tgan.gif)
