@@ -53,7 +53,7 @@ def arg_getter(truth, predictions):
 def calculate_skill_scores(ypredicted, ytruth, x=None, threshold=0.5):
     """
     Calculates some common weather forecasting metrics from these:
-    hit: pred=truth=1, miss: pred=0 truth=1, false larm: pred=1 truth=0
+    hit: pred=truth=1, miss: pred=0 truth=1, false alarm: pred=1 truth=0
     The metrics are: CSI: Critical Success Index, FAR: False Alarm Rate, POD: Probability od Detection
     :param ypredicted: shape (samples,w,h) predictions of network
     :param ytruth: shape (samles,w,h) same as for the predictions, ground truth next frame
