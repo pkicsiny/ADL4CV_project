@@ -24,9 +24,9 @@ The generator is a U-net and it gets a sequence of consecutive frames and output
 The images below show some example predictions from the test set by iteratively using two frames as input to predict the following frame. Predictions with the models developed by us, the baseline model and the ground truth sequence are shown.
 
 <p align="center">
-  <img src=plots/comparison_1.png scale="0.1">
+  <img src=plots/comparison_1.png width="1000">
 </p>
 
 <p align="center">
-  <img src=plots/comparison_2.png scale=0.1>
+  <img src=plots/comparison_2.png width="1000">
 </p>
