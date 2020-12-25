@@ -17,7 +17,19 @@ The rough idea of our approach is depicted below.
   <img src=plots/idea.png>
 </p>
   
-The generator is a U-net and it gets a sequence of consecutive frames and outputs the next frame at timestamp t+1. The first (spatial) discriminator gets the whole sequence as input with the prediction or ground truth appended to it. The second (temporal) discriminator uses precalculated optical flows using the Lukas-Kanade method to warp the last frame of the input into a "physically correct" representation of the next frame with the second order discretized advection (warp) equation. This is then appended to the prediction/ground truth and fed into the discriminator as input. The two discriminators only differ in their inputs but have identical architecture.
+The generator is a U-net and it gets a sequence of consecutive frames and outputs the next frame at timestamp t+1. The first (spatial) discriminator gets the whole sequence as input with the prediction or ground truth appended to it. The second (temporal) discriminator uses precalculated optical flows with the Lukas-Kanade method:
+
+<p align="center">
+  <img src=plots/optical_flow_1.png>
+</p>
+
+to warp the last frame of the input into a "physically correct" representation of the next frame by then applying the second order discretized advection (warp) equation:
+
+<p align="center">
+  <img src=plots/advection_1.png>
+</p>
+
+This is then appended to the prediction/ground truth and fed into the discriminator as input. The two discriminators only differ in their inputs but have identical architecture.
 
 The images below show some example predictions from the test set by iteratively using two frames as input to predict the following frame. Predictions with the models developed by us, the baseline model and the ground truth sequence are shown.
 
