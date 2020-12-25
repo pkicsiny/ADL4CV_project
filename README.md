@@ -17,7 +17,7 @@ The rough idea of our approach is depicted below.
   <img src=plots/idea.png>
 </p>
   
-The generator is a U-net and it gets a sequence of consecutive frames and outputs the next frame at timestamp t+1. The first (spatial) discriminator gets the whole sequence as input with the prediction or ground truth appended to it. The second (temporal) discriminator uses precalculated optical flows with the Lukas-Kanade method:
+The generator is a U-net and it gets a sequence of consecutive frames and outputs the next frame at timestamp t+1. The first (spatial) discriminator gets the whole sequence as input with the prediction or ground truth appended to it. The second (temporal) discriminator uses optical flows precalculated with the Lukas-Kanade method:
 
 <p align="center">
   <img src=plots/optical_flow_1.png>
