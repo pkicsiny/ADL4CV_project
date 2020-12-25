@@ -17,13 +17,7 @@ The rough idea of our approach is depicted below.
   <img src=plots/idea.png>
 </p>
   
-The generator is a U-net and it gets a sequence of consecutive frames and outputs the next frame at timestamp t+1. The first (spatial) discriminator gets the whole sequence as input with the prediction or ground truth appended to it. The second (temporal) discriminator uses optical flow frames precalculated with the Lukas-Kanade method:
-
-<p align="center">
-  <img src=plots/optical_flow_1.png>
-</p>
-
-to warp the last frame of the input into a "physically correct" representation of the next frame by then applying the second order discretized advection (warp) equation:
+The generator is a U-net and it gets a sequence of consecutive frames and outputs the next frame at timestamp t+1. The first (spatial) discriminator gets the whole sequence as input with the prediction or ground truth appended to it. The second (temporal) discriminator uses optical flow frames precalculated with the continuity equation for each pixel neighborhood (Lukas-Kanade method). In order to warp the last frame of the input into a "physically correct" estimation of the next frame, the second order discretized advection (warp) equation is solved, with the optical flow images used as a velocity field:
 
 <p align="center">
   <img src=plots/advection_2.png>
