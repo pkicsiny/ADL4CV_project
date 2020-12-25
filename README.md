@@ -23,7 +23,7 @@ The generator is a U-net and it gets a sequence of consecutive frames and output
   <img src=plots/optical_flow_1.png>
 </p>
 
-to warp the last frame of the input into a "physically correct" representation of the next frame by then applying the second order discretized advection (warp) equation:
+to warp the last frame of the input into a "physically correct" representation of the next frame by then applying the discretized advection (warp) equation:
 
 <p align="center">
   <img src=plots/advection_1.png>
