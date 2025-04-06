@@ -24,13 +24,3 @@ The generator is a U-net and it gets a sequence of consecutive frames and output
 </p>
 
 This is then appended to the prediction/ground truth and fed into the discriminator as input. The two discriminators only differ in their inputs but have identical architecture.
-
-The images below show some example predictions from the test set by iteratively using two frames as input to predict the following frame. Predictions with the models developed by us, the baseline model and the ground truth sequence are shown.
-
-<p align="center">
-  <img src=plots/comparison_1.png width="700">
-</p>
-
-<p align="center">
-  <img src=plots/comparison_2.png width="700">
-</p>
